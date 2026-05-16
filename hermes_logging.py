@@ -322,8 +322,66 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
         self._chmod_if_managed()
         return stream
 
+    def _next_rollover_temp_name(self) -> str:
+        base = self.baseFilename
+        ident = f"{os.getpid()}.{threading.get_ident()}"
+        for index in range(1000):
+            candidate = f"{base}.{ident}.{index}.rollover"
+            if not os.path.exists(candidate):
+                return candidate
+        return f"{base}.{ident}.rollover"
+
+    def _restore_staged_rollover(self, staged_name: str) -> None:
+        if not os.path.exists(staged_name):
+            return
+        if not os.path.exists(self.baseFilename):
+            self.rotate(staged_name, self.baseFilename)
+            return
+        with open(staged_name, "rb") as source, open(self.baseFilename, "ab") as target:
+            target.write(source.read())
+        os.remove(staged_name)
+
+    def _do_staged_rollover(self) -> None:
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        if self.backupCount > 0 and os.path.exists(self.baseFilename):
+            staged_name = self._next_rollover_temp_name()
+            try:
+                self.rotate(self.baseFilename, staged_name)
+                if os.path.exists(staged_name):
+                    for i in range(self.backupCount - 1, 0, -1):
+                        sfn = self.rotation_filename(f"{self.baseFilename}.{i}")
+                        dfn = self.rotation_filename(f"{self.baseFilename}.{i + 1}")
+                        if os.path.exists(sfn):
+                            if os.path.exists(dfn):
+                                os.remove(dfn)
+                            os.rename(sfn, dfn)
+                    dfn = self.rotation_filename(f"{self.baseFilename}.1")
+                    if os.path.exists(dfn):
+                        os.remove(dfn)
+                    self.rotate(staged_name, dfn)
+            except Exception:
+                self._restore_staged_rollover(staged_name)
+                raise
+
+        if not self.delay:
+            self.stream = self._open()
+
     def doRollover(self):
-        super().doRollover()
+        try:
+            self._do_staged_rollover()
+        except PermissionError as exc:
+            # Windows rejects renaming a log file while another Hermes process
+            # still has it open.  Treat that as a deferred rollover instead of
+            # letting logging emit a noisy "--- Logging error ---" traceback to
+            # the user's terminal.  Reopen the active log so the triggering
+            # record is still appended; a later record will retry rollover.
+            self._last_rollover_permission_error = exc  # type: ignore[attr-defined]
+            if self.stream is None and not self.delay:
+                self.stream = self._open()
+            return
         self._chmod_if_managed()
 
 

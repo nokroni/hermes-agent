@@ -3,6 +3,7 @@
 import logging
 import os
 import stat
+import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -691,6 +692,144 @@ class TestAddRotatingHandler:
                 logger.removeHandler(h)
                 h.close()
 
+    def test_rollover_permission_error_keeps_logging_without_stderr_noise(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Windows can reject rename while another Hermes process holds agent.log."""
+        log_path = tmp_path / "locked-rollover.log"
+        logger = logging.getLogger("_test_rotating_locked_rollover")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        formatter = logging.Formatter("%(message)s")
+
+        hermes_logging._add_rotating_handler(
+            logger,
+            log_path,
+            level=logging.INFO,
+            max_bytes=1,
+            backup_count=1,
+            formatter=formatter,
+        )
+        handler = next(h for h in logger.handlers if isinstance(h, RotatingFileHandler))
+
+        def locked_rotate(_source, _dest):
+            raise PermissionError("[WinError 32] file is used by another process")
+
+        monkeypatch.setattr(handler, "rotate", locked_rotate)
+
+        try:
+            logger.info("record should still be appended after failed rollover")
+            handler.flush()
+        finally:
+            for h in list(logger.handlers):
+                if isinstance(h, RotatingFileHandler):
+                    logger.removeHandler(h)
+                    h.close()
+            logger.propagate = True
+
+        captured = capsys.readouterr()
+        assert "--- Logging error ---" not in captured.err
+        assert "record should still be appended" in log_path.read_text(encoding="utf-8")
+
+    def test_rollover_retries_after_transient_permission_error(self, tmp_path, monkeypatch):
+        log_path = tmp_path / "transient-rollover.log"
+        logger = logging.getLogger("_test_rotating_transient_rollover")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        formatter = logging.Formatter("%(message)s")
+
+        hermes_logging._add_rotating_handler(
+            logger,
+            log_path,
+            level=logging.INFO,
+            max_bytes=1,
+            backup_count=1,
+            formatter=formatter,
+        )
+        handler = next(h for h in logger.handlers if isinstance(h, RotatingFileHandler))
+        real_rotate = handler.rotate
+        calls = {"count": 0}
+
+        def fail_once_then_rotate(source, dest):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise PermissionError("[WinError 32] file is used by another process")
+            real_rotate(source, dest)
+
+        monkeypatch.setattr(handler, "rotate", fail_once_then_rotate)
+
+        try:
+            logger.info("first record survives transient lock")
+            handler.flush()
+            logger.info("second record triggers later successful rollover")
+            handler.flush()
+        finally:
+            for h in list(logger.handlers):
+                if isinstance(h, RotatingFileHandler):
+                    logger.removeHandler(h)
+                    h.close()
+            logger.propagate = True
+
+        assert calls["count"] >= 2
+        assert (tmp_path / "transient-rollover.log.1").exists()
+        combined = log_path.read_text(encoding="utf-8") + (tmp_path / "transient-rollover.log.1").read_text(
+            encoding="utf-8"
+        )
+        assert "first record survives transient lock" in combined
+        assert "second record triggers later successful rollover" in combined
+
+    def test_failed_active_rollover_preserves_existing_backup_chain(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        log_path = tmp_path / "backup-chain.log"
+        log_path.write_text("active before failure\n", encoding="utf-8")
+        for suffix, content in ((".1", "backup one\n"), (".2", "backup two\n"), (".3", "backup three\n")):
+            (tmp_path / f"backup-chain.log{suffix}").write_text(content, encoding="utf-8")
+
+        logger = logging.getLogger("_test_rotating_backup_chain")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        formatter = logging.Formatter("%(message)s")
+
+        hermes_logging._add_rotating_handler(
+            logger,
+            log_path,
+            level=logging.INFO,
+            max_bytes=1,
+            backup_count=3,
+            formatter=formatter,
+        )
+        handler = next(h for h in logger.handlers if isinstance(h, RotatingFileHandler))
+        real_rotate = handler.rotate
+
+        def fail_only_active_rotate(source, dest):
+            if source == str(log_path):
+                raise PermissionError("[WinError 32] file is used by another process")
+            real_rotate(source, dest)
+
+        monkeypatch.setattr(handler, "rotate", fail_only_active_rotate)
+
+        try:
+            logger.info("record appended while active rollover is locked")
+            handler.flush()
+        finally:
+            for h in list(logger.handlers):
+                if isinstance(h, RotatingFileHandler):
+                    logger.removeHandler(h)
+                    h.close()
+            logger.propagate = True
+
+        captured = capsys.readouterr()
+        assert "--- Logging error ---" not in captured.err
+        assert "record appended while active rollover is locked" in log_path.read_text(encoding="utf-8")
+        assert (tmp_path / "backup-chain.log.1").read_text(encoding="utf-8") == "backup one\n"
+        assert (tmp_path / "backup-chain.log.2").read_text(encoding="utf-8") == "backup two\n"
+        assert (tmp_path / "backup-chain.log.3").read_text(encoding="utf-8") == "backup three\n"
+
+    @pytest.mark.skipif(
+        sys.platform.startswith("win"),
+        reason="POSIX mode bits are not enforced on Windows",
+    )
     def test_managed_mode_initial_open_sets_group_writable(self, tmp_path):
         log_path = tmp_path / "managed-open.log"
         logger = logging.getLogger("_test_rotating_managed_open")
@@ -715,6 +854,10 @@ class TestAddRotatingHandler:
                 logger.removeHandler(h)
                 h.close()
 
+    @pytest.mark.skipif(
+        sys.platform.startswith("win"),
+        reason="POSIX mode bits are not enforced on Windows",
+    )
     def test_managed_mode_rollover_sets_group_writable(self, tmp_path):
         log_path = tmp_path / "managed-rollover.log"
         logger = logging.getLogger("_test_rotating_managed_rollover")
