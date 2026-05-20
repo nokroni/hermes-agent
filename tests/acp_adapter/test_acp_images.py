@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 import pytest
 from acp.schema import (
@@ -10,7 +11,34 @@ from acp.schema import (
     TextResourceContents,
 )
 
-from acp_adapter.server import HermesACPAgent, _content_blocks_to_openai_user_content
+from acp_adapter.server import (
+    HermesACPAgent,
+    _content_blocks_to_openai_user_content,
+    _path_from_file_uri,
+)
+
+
+def test_path_from_file_uri_keeps_windows_drive_path_off_wsl(monkeypatch):
+    monkeypatch.setattr("acp_adapter.server.is_wsl", lambda: False)
+
+    assert _path_from_file_uri("file:///C:/Users/Example/notes.md") == Path(
+        "C:/Users/Example/notes.md"
+    )
+    assert _path_from_file_uri(r"C:\\Users\\Example\\notes.md") == Path(
+        "C:/Users/Example/notes.md"
+    )
+
+
+def test_path_from_file_uri_translates_windows_drive_path_on_wsl(monkeypatch):
+    monkeypatch.setattr("acp_adapter.server.is_wsl", lambda: True)
+
+    assert _path_from_file_uri("file:///D:/work/project/file.txt") == Path(
+        "/mnt/d/work/project/file.txt"
+    )
+
+
+def test_path_from_file_uri_ignores_non_file_uri_scheme():
+    assert _path_from_file_uri("x:foo") is None
 
 
 def test_acp_image_blocks_convert_to_openai_multimodal_content():
@@ -38,7 +66,7 @@ def test_text_only_acp_blocks_stay_string_for_legacy_prompt_path():
 
 def test_acp_resource_link_file_is_inlined_as_text(tmp_path):
     attached = tmp_path / "notes.md"
-    attached.write_text("# Notes\n\nAttached file body", encoding="utf-8")
+    attached.write_text("# Notes\n\nAttached file body", encoding="utf-8", newline="\n")
 
     content = _content_blocks_to_openai_user_content([
         TextContentBlock(type="text", text="Please read this file"),

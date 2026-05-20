@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import posixpath
 import shlex
 import shutil
 import subprocess
@@ -53,10 +54,10 @@ def get_chrome_debug_candidates(system: str) -> list[str]:
         candidates.append(path)
         seen.add(normalized)
 
-    def add_install_paths(bases: tuple[str | None, ...]) -> None:
+    def add_install_paths(bases: tuple[str | None, ...], *, path_join=os.path.join) -> None:
         for base in filter(None, bases):
             for parts in _WINDOWS_INSTALL_PARTS:
-                add(os.path.join(base, *parts))
+                add(path_join(base, *parts))
 
     if system == "Darwin":
         for app in _DARWIN_APPS:
@@ -75,7 +76,10 @@ def get_chrome_debug_candidates(system: str) -> list[str]:
 
     for name in _LINUX_BIN_NAMES:
         add(shutil.which(name))
-    add_install_paths(("/mnt/c/Program Files", "/mnt/c/Program Files (x86)"))
+    add_install_paths(
+        ("/mnt/c/Program Files", "/mnt/c/Program Files (x86)"),
+        path_join=posixpath.join,
+    )
     return candidates
 
 

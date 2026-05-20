@@ -21,7 +21,7 @@ try:
     import fcntl
 except ImportError:
     fcntl = None  # Windows — file locking skipped
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from hermes_constants import get_hermes_home
@@ -86,8 +86,8 @@ def quoted_mkdir_command(dirs: list[str]) -> str:
 
 
 def unique_parent_dirs(files: list[tuple[str, str]]) -> list[str]:
-    """Extract sorted unique parent directories from (host, remote) pairs."""
-    return sorted({str(Path(remote).parent) for _, remote in files})
+    """Extract sorted unique POSIX parent directories from (host, remote) pairs."""
+    return sorted({str(PurePosixPath(remote).parent) for _, remote in files})
 
 
 def _sha256_file(path: str) -> str:
@@ -303,13 +303,16 @@ class FileSyncManager:
         except Exception:
             file_mapping = []
 
-        with tempfile.NamedTemporaryFile(suffix=".tar") as tf:
-            self._bulk_download_fn(Path(tf.name))
+        # Use a closed path rather than NamedTemporaryFile: on Windows the
+        # downloader needs to reopen the destination path for writing.
+        with tempfile.TemporaryDirectory(prefix="hermes-sync-back-download-") as download_dir:
+            tar_path = Path(download_dir) / "remote.tar"
+            self._bulk_download_fn(tar_path)
 
             # Defensive size cap: a misbehaving sandbox could produce an
             # arbitrarily large tar. Refuse to extract if it exceeds the cap.
             try:
-                tar_size = os.path.getsize(tf.name)
+                tar_size = os.path.getsize(tar_path)
             except OSError:
                 tar_size = 0
             if tar_size > _SYNC_BACK_MAX_BYTES:
@@ -320,14 +323,14 @@ class FileSyncManager:
                 return
 
             with tempfile.TemporaryDirectory(prefix="hermes-sync-back-") as staging:
-                with tarfile.open(tf.name) as tar:
+                with tarfile.open(tar_path) as tar:
                     tar.extractall(staging, filter="data")
 
                 applied = 0
                 for dirpath, _dirnames, filenames in os.walk(staging):
                     for fname in filenames:
                         staged_file = os.path.join(dirpath, fname)
-                        rel = os.path.relpath(staged_file, staging)
+                        rel = Path(staged_file).relative_to(staging).as_posix()
                         remote_path = "/" + rel
 
                         pushed_hash = self._pushed_hashes.get(remote_path)
@@ -391,7 +394,7 @@ class FileSyncManager:
         """
         mapping = file_mapping if file_mapping is not None else []
         for host, remote in mapping:
-            remote_dir = str(Path(remote).parent)
+            remote_dir = str(PurePosixPath(remote).parent)
             if remote_path.startswith(remote_dir + "/"):
                 host_dir = str(Path(host).parent)
                 suffix = remote_path[len(remote_dir):]

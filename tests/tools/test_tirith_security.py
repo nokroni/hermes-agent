@@ -988,7 +988,8 @@ class TestHermesHomeIsolation:
         from tools.tirith_security import _failure_marker_path
         with patch.dict(os.environ, {"HERMES_HOME": "/custom/hermes"}):
             result = _failure_marker_path()
-        assert result == "/custom/hermes/.tirith-install-failed"
+        expected = os.path.join(os.path.normpath("/custom/hermes"), ".tirith-install-failed")
+        assert result == expected
 
     def test_conftest_isolation_prevents_real_home_writes(self):
         """The conftest autouse fixture sets HERMES_HOME; verify it's active."""
@@ -996,13 +997,14 @@ class TestHermesHomeIsolation:
         assert hermes_home is not None, "HERMES_HOME should be set by conftest"
         assert "hermes_test" in hermes_home, "Should point to test temp dir"
 
-    def test_get_hermes_home_fallback(self):
+    def test_get_hermes_home_fallback(self, tmp_path):
         """Without HERMES_HOME set, falls back to the active OS home."""
         from tools.tirith_security import _get_hermes_home
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove HERMES_HOME entirely. With HOME also absent, expanduser
-            # falls back to the account database; compute expected under the
-            # same environment instead of after patch.dict restores HOME.
+        env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+        with patch.dict(os.environ, env, clear=True):
+            # Remove HERMES_HOME entirely while keeping a platform-native OS
+            # home available. On Windows, clearing USERPROFILE makes
+            # pathlib.Path.home() fall back to Hermes' secure temp directory.
             os.environ.pop("HERMES_HOME", None)
             expected = os.path.join(os.path.expanduser("~"), ".hermes")
             result = _get_hermes_home()

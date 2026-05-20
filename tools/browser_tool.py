@@ -132,7 +132,7 @@ def _discover_homebrew_node_dirs() -> tuple[str, ...]:
     try:
         for entry in os.listdir(homebrew_opt):
             if entry.startswith("node") and entry != "node":
-                bin_dir = os.path.join(homebrew_opt, entry, "bin")
+                bin_dir = f"{homebrew_opt}/{entry}/bin"
                 if os.path.isdir(bin_dir):
                     dirs.append(bin_dir)
     except OSError:

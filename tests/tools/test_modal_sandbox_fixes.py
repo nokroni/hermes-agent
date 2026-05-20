@@ -92,7 +92,7 @@ class TestCwdHandling:
         monkeypatch.setenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "true")
         config = _tt_mod._get_env_config()
         assert config["cwd"] == "/workspace"
-        assert config["host_cwd"] == "/Users/someone/projects"
+        assert config["host_cwd"] == os.path.abspath(os.path.expanduser("/Users/someone/projects"))
         assert config["docker_mount_cwd_to_workspace"] is True
 
     def test_windows_path_replaced_for_modal(self, monkeypatch):
@@ -141,7 +141,7 @@ class TestCwdHandling:
         monkeypatch.delenv("TERMINAL_CWD", raising=False)
         config = _tt_mod._get_env_config()
         assert config["cwd"] == "/workspace"
-        assert config["host_cwd"] == "/home/user/project"
+        assert config["host_cwd"] == os.path.abspath(os.path.expanduser("/home/user/project"))
 
     def test_local_backend_uses_getcwd(self, monkeypatch):
         """Local backend should use os.getcwd(), not /root."""

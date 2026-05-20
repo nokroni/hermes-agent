@@ -69,8 +69,8 @@ class TestGetSubprocessHome:
         home_b = get_subprocess_home()
 
         assert home_a != home_b
-        assert home_a.endswith("alpha/home")
-        assert home_b.endswith("beta/home")
+        assert home_a.replace("\\", "/").endswith("alpha/home")
+        assert home_b.replace("\\", "/").endswith("beta/home")
 
 
 # ---------------------------------------------------------------------------

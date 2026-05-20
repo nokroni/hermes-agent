@@ -179,9 +179,12 @@ def test_setup_gateway_skips_service_install_when_systemctl_missing(monkeypatch,
     monkeypatch.setattr(setup_mod, "get_env_value", lambda key: env.get(key, ""))
     monkeypatch.setattr(gateway_mod, "get_env_value", lambda key: env.get(key, ""))
     monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: False)
+    monkeypatch.setattr(setup_mod, "prompt_checklist", lambda _q, _items, selected=None: list(selected or []))
     monkeypatch.setattr("platform.system", lambda: "Linux")
-
+    monkeypatch.setattr(gateway_mod.sys, "platform", "linux")
+    monkeypatch.setattr(gateway_mod, "_configure_platform", lambda _platform: None)
     monkeypatch.setattr(gateway_mod, "supports_systemd_services", lambda: False)
+
     monkeypatch.setattr(gateway_mod, "is_macos", lambda: False)
     monkeypatch.setattr(gateway_mod, "_is_service_installed", lambda: False)
     monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)
@@ -218,9 +221,12 @@ def test_setup_gateway_in_container_shows_docker_guidance(monkeypatch, capsys):
     monkeypatch.setattr(setup_mod, "get_env_value", lambda key: env.get(key, ""))
     monkeypatch.setattr(gateway_mod, "get_env_value", lambda key: env.get(key, ""))
     monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: False)
+    monkeypatch.setattr(setup_mod, "prompt_checklist", lambda _q, _items, selected=None: list(selected or []))
     monkeypatch.setattr("platform.system", lambda: "Linux")
-
+    monkeypatch.setattr(gateway_mod.sys, "platform", "linux")
+    monkeypatch.setattr(gateway_mod, "_configure_platform", lambda _platform: None)
     monkeypatch.setattr(gateway_mod, "supports_systemd_services", lambda: False)
+
     monkeypatch.setattr(gateway_mod, "is_macos", lambda: False)
     monkeypatch.setattr(gateway_mod, "_is_service_installed", lambda: False)
     monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)

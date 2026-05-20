@@ -48,8 +48,9 @@ class TestResolveSafeCwd:
         itself is still a valid recovery target — don't skip it just because
         ``os.path.dirname('/') == '/'`` is the loop's exit condition."""
         sep = os.path.sep
+        missing = os.path.join(sep, "no", "such", "deep", "dir")
         monkeypatch.setattr(os.path, "isdir", lambda p: p == sep)
-        assert _resolve_safe_cwd("/no/such/deep/dir") == sep
+        assert _resolve_safe_cwd(missing) == sep
 
 
 def _fake_interrupt():

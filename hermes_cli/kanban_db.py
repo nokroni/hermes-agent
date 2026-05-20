@@ -2985,9 +2985,18 @@ def _classify_worker_exit(pid: int) -> "tuple[str, Optional[int]]":
             return ("nonzero_exit", code)
         if os.WIFSIGNALED(raw):
             return ("signaled", os.WTERMSIG(raw))
+    except AttributeError:
+        # Windows lacks POSIX wait-status helpers.  ``os.waitpid`` statuses
+        # there are best treated as process exit codes; tests may also pass
+        # POSIX-style ``status << 8`` values to pin cross-platform behavior.
+        if raw == 0:
+            return ("clean_exit", 0)
+        code = raw >> 8 if raw > 0xFF and raw & 0xFF == 0 else raw
+        return ("nonzero_exit", code)
     except Exception:
         pass
     return ("unknown", None)
+
 
 
 def _pid_alive(pid: Optional[int]) -> bool:

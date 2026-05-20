@@ -51,6 +51,14 @@ def _make_manager(write_frequency="turn") -> HonchoSessionManager:
     return mgr
 
 
+def _make_async_manager_without_thread() -> HonchoSessionManager:
+    """Create an async-mode manager without racing the background writer."""
+    with patch("plugins.memory.honcho.session.threading.Thread.start"):
+        mgr = _make_manager(write_frequency="async")
+    mgr._async_thread = None
+    return mgr
+
+
 # ---------------------------------------------------------------------------
 # write_frequency parsing from config file
 # ---------------------------------------------------------------------------
@@ -204,7 +212,7 @@ class TestSaveRouting:
             mock_flush.assert_not_called()
 
     def test_async_mode_enqueues(self):
-        mgr = _make_manager(write_frequency="async")
+        mgr = _make_async_manager_without_thread()
         sess = self._make_session_with_message(mgr)
         with patch.object(mgr, "_flush_session") as mock_flush:
             mgr.save(sess)
@@ -251,15 +259,14 @@ class TestFlushAll:
             assert mock_flush.call_count == 2
 
     def test_flush_all_drains_async_queue(self):
-        mgr = _make_manager(write_frequency="async")
+        mgr = _make_async_manager_without_thread()
         sess = _make_session()
         sess.add_message("user", "pending")
         mgr._async_queue.put(sess)
 
         with patch.object(mgr, "_flush_session") as mock_flush:
             mgr.flush_all()
-            # Called at least once for the queued item
-            assert mock_flush.call_count >= 1
+            mock_flush.assert_called_once_with(sess)
 
     def test_flush_all_tolerates_errors(self):
         mgr = _make_manager(write_frequency="session")

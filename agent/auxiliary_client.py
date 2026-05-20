@@ -715,32 +715,38 @@ class _CodexCompletionsAdapter:
         deadline = time.monotonic() + float(total_timeout) if total_timeout else None
         timed_out = threading.Event()
         timeout_timer: Optional[threading.Timer] = None
+        timeout_close_lock = threading.Lock()
 
         def _timeout_message() -> str:
             return f"Codex auxiliary Responses stream exceeded {float(total_timeout):.1f}s total timeout"
 
         def _close_client_on_timeout() -> None:
-            timed_out.set()
-            close = getattr(self._client, "close", None)
-            if callable(close):
+            with timeout_close_lock:
+                if timed_out.is_set():
+                    return
+                timed_out.set()
+                close = getattr(self._client, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        logger.debug("Codex auxiliary: client close during timeout failed", exc_info=True)
+                # The cached auxiliary client wraps this same ``self._client``
+                # (or *is* a ``CodexAuxiliaryClient`` whose ``_real_client`` is
+                # this instance).  After we close the httpx transport above, the
+                # cache must drop that entry — otherwise the next auxiliary call
+                # (compression retry, memory flush, etc.) reuses the dead client
+                # and fails fast with a connection error.  See issue #23432.
                 try:
-                    close()
+                    _evict_cached_client_instance(self._client)
                 except Exception:
-                    logger.debug("Codex auxiliary: client close during timeout failed", exc_info=True)
-            # The cached auxiliary client wraps this same ``self._client``
-            # (or *is* a ``CodexAuxiliaryClient`` whose ``_real_client`` is
-            # this instance).  After we close the httpx transport above, the
-            # cache must drop that entry — otherwise the next auxiliary call
-            # (compression retry, memory flush, etc.) reuses the dead client
-            # and fails fast with a connection error.  See issue #23432.
-            try:
-                _evict_cached_client_instance(self._client)
-            except Exception:
-                logger.debug("Codex auxiliary: cache eviction on timeout failed", exc_info=True)
+                    logger.debug("Codex auxiliary: cache eviction on timeout failed", exc_info=True)
 
         def _check_cancelled() -> None:
+            if timed_out.is_set():
+                raise TimeoutError(_timeout_message())
             if deadline is not None and time.monotonic() >= deadline:
-                timed_out.set()
+                _close_client_on_timeout()
                 raise TimeoutError(_timeout_message())
             try:
                 from tools.interrupt import is_interrupted

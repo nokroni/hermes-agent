@@ -33,6 +33,21 @@ _docker_executable: Optional[str] = None  # resolved once, cached
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _is_executable_file(path: str) -> bool:
+    """Return whether path names a runnable CLI executable on this host."""
+    if not os.path.isfile(path):
+        return False
+    if os.name == "nt":
+        # Windows does not have POSIX execute bits; os.access(..., X_OK) is
+        # true for many regular files. Match CreateProcess/PATHEXT semantics
+        # instead so a text file named "podman" is not accepted as an
+        # override binary.
+        pathext = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+        executable_exts = {ext.lower() for ext in pathext.split(os.pathsep) if ext}
+        return os.path.splitext(path)[1].lower() in executable_exts
+    return os.access(path, os.X_OK)
+
+
 def _normalize_forward_env_names(forward_env: list[str] | None) -> list[str]:
     """Return a deduplicated list of valid environment variable names."""
     normalized: list[str] = []
@@ -115,7 +130,7 @@ def find_docker() -> Optional[str]:
 
     # 1. Explicit override via env var (e.g. for Podman on immutable distros)
     override = os.getenv("HERMES_DOCKER_BINARY")
-    if override and os.path.isfile(override) and os.access(override, os.X_OK):
+    if override and _is_executable_file(override):
         _docker_executable = override
         logger.info("Using HERMES_DOCKER_BINARY override: %s", override)
         return override
@@ -135,7 +150,7 @@ def find_docker() -> Optional[str]:
 
     # 4. Well-known macOS Docker Desktop locations
     for path in _DOCKER_SEARCH_PATHS:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
+        if _is_executable_file(path):
             _docker_executable = path
             logger.info("Found docker at non-PATH location: %s", path)
             return path

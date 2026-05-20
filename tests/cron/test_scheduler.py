@@ -12,6 +12,16 @@ from tools.env_passthrough import clear_env_passthrough
 from tools.credential_files import clear_credential_files
 
 
+def _clear_home_delivery_env(monkeypatch):
+    """Remove configured home targets and their optional thread/topic IDs."""
+    from cron.scheduler import _HOME_TARGET_ENV_VARS, _LEGACY_HOME_TARGET_ENV_VARS
+
+    env_vars = set(_HOME_TARGET_ENV_VARS.values()) | set(_LEGACY_HOME_TARGET_ENV_VARS.values())
+    for env_var in env_vars:
+        monkeypatch.delenv(env_var, raising=False)
+        monkeypatch.delenv(f"{env_var}_THREAD_ID", raising=False)
+
+
 class TestResolveOrigin:
     def test_full_origin(self):
         job = {
@@ -23,6 +33,7 @@ class TestResolveOrigin:
             }
         }
         result = _resolve_origin(job)
+
         assert isinstance(result, dict)
         assert result == job["origin"]
         assert result["platform"] == "telegram"
@@ -105,24 +116,7 @@ class TestResolveDeliveryTarget:
     def test_origin_delivery_without_origin_falls_back_to_supported_home_channels(
         self, monkeypatch, platform, env_var, chat_id
     ):
-        for fallback_env in (
-            "MATRIX_HOME_ROOM",
-            "MATRIX_HOME_CHANNEL",
-            "TELEGRAM_HOME_CHANNEL",
-            "DISCORD_HOME_CHANNEL",
-            "SLACK_HOME_CHANNEL",
-            "SIGNAL_HOME_CHANNEL",
-            "MATTERMOST_HOME_CHANNEL",
-            "SMS_HOME_CHANNEL",
-            "EMAIL_HOME_ADDRESS",
-            "DINGTALK_HOME_CHANNEL",
-            "BLUEBUBBLES_HOME_CHANNEL",
-            "FEISHU_HOME_CHANNEL",
-            "WECOM_HOME_CHANNEL",
-            "WEIXIN_HOME_CHANNEL",
-            "QQ_HOME_CHANNEL",
-        ):
-            monkeypatch.delenv(fallback_env, raising=False)
+        _clear_home_delivery_env(monkeypatch)
         monkeypatch.setenv(env_var, chat_id)
 
         assert _resolve_delivery_target({"deliver": "origin"}) == {
@@ -132,6 +126,7 @@ class TestResolveDeliveryTarget:
         }
 
     def test_bare_matrix_delivery_uses_matrix_home_room(self, monkeypatch):
+        _clear_home_delivery_env(monkeypatch)
         monkeypatch.delenv("MATRIX_HOME_CHANNEL", raising=False)
         monkeypatch.setenv("MATRIX_HOME_ROOM", "!room123:example.org")
 
@@ -263,6 +258,7 @@ class TestResolveDeliveryTarget:
         }
 
     def test_bare_platform_falls_back_to_home_channel(self, monkeypatch):
+        _clear_home_delivery_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-2002")
         job = {
             "deliver": "telegram",
@@ -320,6 +316,7 @@ class TestResolveDeliveryTarget:
         resolved for deliver=['telegram']" because ``str(['telegram'])`` was
         passed through to ``split(',')`` verbatim.
         """
+        _clear_home_delivery_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-4004")
         job = {
             "deliver": ["telegram"],
@@ -354,10 +351,15 @@ class TestResolveDeliveryTarget:
 class TestRoutingIntents:
     """``all`` routing intent expands at fire time."""
 
+    @staticmethod
+    def _clear_home_channel_env(monkeypatch):
+        _clear_home_delivery_env(monkeypatch)
+
     def test_all_expands_to_every_connected_home_channel(self, monkeypatch):
         """deliver='all' fans out to every platform with a configured home channel."""
         from cron.scheduler import _resolve_delivery_targets
 
+        self._clear_home_channel_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
         monkeypatch.setenv("SLACK_HOME_CHANNEL", "C333")
@@ -378,6 +380,7 @@ class TestRoutingIntents:
         """'telegram:-999,all' yields every home channel + the explicit target without dupes."""
         from cron.scheduler import _resolve_delivery_targets
 
+        self._clear_home_channel_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
 
@@ -397,12 +400,7 @@ class TestRoutingIntents:
         """deliver='all' with nothing connected returns [] — delivery is recorded as failed upstream."""
         from cron.scheduler import _resolve_delivery_targets
 
-        for var in ("TELEGRAM_HOME_CHANNEL", "DISCORD_HOME_CHANNEL", "SLACK_HOME_CHANNEL",
-                    "SIGNAL_HOME_CHANNEL", "MATRIX_HOME_ROOM", "MATTERMOST_HOME_CHANNEL",
-                    "SMS_HOME_CHANNEL", "EMAIL_HOME_ADDRESS", "DINGTALK_HOME_CHANNEL",
-                    "FEISHU_HOME_CHANNEL", "WECOM_HOME_CHANNEL", "WEIXIN_HOME_CHANNEL",
-                    "BLUEBUBBLES_HOME_CHANNEL", "QQBOT_HOME_CHANNEL", "QQ_HOME_CHANNEL"):
-            monkeypatch.delenv(var, raising=False)
+        self._clear_home_channel_env(monkeypatch)
 
         assert _resolve_delivery_targets({"deliver": "all", "origin": None}) == []
 
@@ -410,6 +408,7 @@ class TestRoutingIntents:
         """'origin,all' delivers to the origin platform plus every other home channel."""
         from cron.scheduler import _resolve_delivery_targets
 
+        self._clear_home_channel_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
 
@@ -431,6 +430,7 @@ class TestRoutingIntents:
         """'ALL' / 'All' / 'all' are all recognized."""
         from cron.scheduler import _resolve_delivery_targets
 
+        self._clear_home_channel_env(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
 

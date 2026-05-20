@@ -1,6 +1,15 @@
+import os
 from unittest.mock import patch
 
+import pytest
+
 from tools.environments.local import LocalEnvironment
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX TMPDIR behavior; Windows uses HERMES_HOME/cache/terminal for shell-safe paths",
+)
 
 
 class TestLocalTempDir:

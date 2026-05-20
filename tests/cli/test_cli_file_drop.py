@@ -209,6 +209,13 @@ class TestEscapedSpaces:
         assert result["path"] == tmp_image_with_spaces
         assert result["is_image"] is True
 
+    def test_file_uri_localhost_image_path(self, tmp_image_with_spaces):
+        uri = tmp_image_with_spaces.as_uri().replace("file:///", "file://localhost/", 1)
+        result = _detect_file_drop(uri)
+        assert result is not None
+        assert result["path"] == tmp_image_with_spaces
+        assert result["is_image"] is True
+
     def test_tilde_prefixed_path(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         img = home / "storage" / "shared" / "Pictures" / "cat.png"

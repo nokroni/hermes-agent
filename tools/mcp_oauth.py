@@ -132,16 +132,22 @@ def _is_interactive() -> bool:
         return False
 
 
-def _can_open_browser() -> bool:
-    """Return True if opening a browser is likely to work."""
+def _can_open_browser(*, os_name: str | None = None, uname: Any = None) -> bool:
+    """Return True if opening a browser is likely to work.
+
+    ``os_name`` and ``uname`` are injectable for tests.  Patching ``os.name``
+    process-wide on Windows breaks ``pathlib.Path`` during pytest reporting.
+    """
     # Explicit SSH session → no local display
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
         return False
+    current_os_name = os.name if os_name is None else os_name
     # macOS and Windows usually have a display
-    if os.name == "nt":
+    if current_os_name == "nt":
         return True
+    uname_fn = uname if uname is not None else getattr(os, "uname", None)
     try:
-        if os.uname().sysname == "Darwin":
+        if uname_fn is not None and uname_fn().sysname == "Darwin":
             return True
     except AttributeError:
         pass

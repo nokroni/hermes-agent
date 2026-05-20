@@ -45,6 +45,27 @@ def test_cprint_no_app_direct_print(monkeypatch):
     assert calls == [("pt_print", ("ANSI", "hello"))]
 
 
+def test_cprint_no_app_plain_print_fallback_when_prompt_toolkit_output_fails(monkeypatch):
+    """Windows Git Bash/MSYS can make prompt_toolkit's Win32Output fail."""
+    printed = []
+
+    def _raise_no_console(_value):
+        raise RuntimeError("no console screen buffer")
+
+    monkeypatch.setattr(cli, "_pt_print", _raise_no_console)
+    monkeypatch.setattr(cli, "_PT_ANSI", lambda t: ("ANSI", t))
+    monkeypatch.setattr("builtins.print", lambda value: printed.append(value))
+
+    fake_pt_app = types.ModuleType("prompt_toolkit.application")
+    fake_pt_app.get_app_or_none = lambda: None
+    fake_pt_app.run_in_terminal = lambda *a, **kw: None
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.application", fake_pt_app)
+
+    cli._cprint("fallback")
+
+    assert printed == ["fallback"]
+
+
 def test_cprint_app_not_running_direct_print(monkeypatch):
     """App exists but not running (e.g. teardown) → direct print."""
     calls = []

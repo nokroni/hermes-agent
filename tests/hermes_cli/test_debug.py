@@ -198,9 +198,9 @@ class TestCaptureLogSnapshot:
 
         # File must exceed the initial chunk_size (8192) used by the
         # backward-reading loop so the truncation path actually fires.
-        line = "A" * 99 + "\n"  # 100 bytes per line
+        line = b"A" * 99 + b"\n"  # 100 bytes per line
         num_lines = 200  # 20000 bytes
-        (hermes_home / "logs" / "agent.log").write_text(line * num_lines)
+        (hermes_home / "logs" / "agent.log").write_bytes(line * num_lines)
 
         # max_bytes = 1000 = 100 * 10 → cut at byte 20000 - 1000 = 19000,
         # and byte 19000 - 1 is '\n'.  Boundary hit → keep all 10 lines.
@@ -215,9 +215,9 @@ class TestCaptureLogSnapshot:
         """When truncation lands mid-line, drop the partial fragment."""
         from hermes_cli.debug import _capture_log_snapshot
 
-        line = "A" * 99 + "\n"  # 100 bytes per line
+        line = b"A" * 99 + b"\n"  # 100 bytes per line
         num_lines = 200  # 20000 bytes
-        (hermes_home / "logs" / "agent.log").write_text(line * num_lines)
+        (hermes_home / "logs" / "agent.log").write_bytes(line * num_lines)
 
         # max_bytes = 950 doesn't divide evenly into 100 → mid-line cut.
         snap = _capture_log_snapshot("agent", tail_lines=5, max_bytes=950)

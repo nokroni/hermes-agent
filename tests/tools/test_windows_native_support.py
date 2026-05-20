@@ -51,9 +51,10 @@ class TestConfigureWindowsStdio:
         yield
         sys.modules.pop("hermes_cli.stdio", None)
 
-    def test_no_op_on_posix(self):
+    def test_no_op_on_posix(self, monkeypatch):
         from hermes_cli import stdio
 
+        monkeypatch.setattr(stdio.sys, "platform", "linux")
         assert stdio.is_windows() is False
         result = stdio.configure_windows_stdio()
         assert result is False
@@ -287,9 +288,13 @@ class TestSigkillFallback:
         assert result == 15
 
     def test_getattr_fallback_prefers_sigkill_when_present(self):
-        """On POSIX the fallback is a no-op: real SIGKILL wins."""
-        result = getattr(signal, "SIGKILL", signal.SIGTERM)
-        assert result == signal.SIGKILL
+        """When SIGKILL exists, the getattr fallback returns it."""
+        fake_signal = MagicMock()
+        fake_signal.SIGKILL = 9
+        fake_signal.SIGTERM = 15
+
+        result = getattr(fake_signal, "SIGKILL", fake_signal.SIGTERM)
+        assert result == 9
 
     @pytest.mark.parametrize(
         "module_path, line_pattern",

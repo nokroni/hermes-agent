@@ -5,9 +5,11 @@ the `else` clause of the attachment content-type loop that was added
 to download, cache, and optionally inject text from non-image/audio files.
 """
 
+import contextlib
 import os
 import sys
 from datetime import datetime, timezone
+
 from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -137,8 +139,9 @@ def make_message(attachments: list, content: str = "") -> SimpleNamespace:
     )
 
 
+@contextlib.contextmanager
 def _mock_aiohttp_download(raw_bytes: bytes):
-    """Return a patch context manager that makes aiohttp return raw_bytes."""
+    """Patch fallback aiohttp downloads and allow the fake CDN URL."""
     resp = AsyncMock()
     resp.status = 200
     resp.read = AsyncMock(return_value=raw_bytes)
@@ -150,7 +153,11 @@ def _mock_aiohttp_download(raw_bytes: bytes):
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
-    return patch("aiohttp.ClientSession", return_value=session)
+    with (
+        patch("gateway.platforms.discord.is_safe_url", return_value=True),
+        patch("aiohttp.ClientSession", return_value=session),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +296,10 @@ class TestIncomingDocumentHandling:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession", return_value=session):
+        with (
+            patch("gateway.platforms.discord.is_safe_url", return_value=True),
+            patch("aiohttp.ClientSession", return_value=session),
+        ):
             msg = make_message([
                 make_attachment(filename="report.pdf", content_type="application/pdf")
             ])
@@ -350,7 +360,10 @@ class TestIncomingDocumentHandling:
 
             return FakeSession()
 
-        with patch("aiohttp.ClientSession", return_value=make_session([content1, content2])):
+        with (
+            patch("gateway.platforms.discord.is_safe_url", return_value=True),
+            patch("aiohttp.ClientSession", return_value=make_session([content1, content2])),
+        ):
             msg = make_message(
                 attachments=[
                     make_attachment(filename="file1.txt", content_type="text/plain"),

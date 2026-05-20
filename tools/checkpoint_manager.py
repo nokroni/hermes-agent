@@ -54,6 +54,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -1607,8 +1608,15 @@ def clear_all(checkpoint_base: Optional[Path] = None) -> Dict[str, int]:
     if not base.exists():
         return out
     size = _dir_size_bytes(base)
+    def _remove_readonly(func, path, _exc_info):
+        try:
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        except OSError:
+            pass
+        func(path)
+
     try:
-        shutil.rmtree(base)
+        shutil.rmtree(base, onerror=_remove_readonly)
         out["bytes_freed"] = size
         out["deleted"] = True
     except OSError as exc:

@@ -503,9 +503,9 @@ class TestSendToPlatformChunking:
         assert all(call == [] for call in sent_calls[:-1])
         assert sent_calls[-1] == media
 
-    def test_matrix_media_uses_native_adapter_helper(self):
+    def test_matrix_media_uses_native_adapter_helper(self, tmp_path):
 
-        doc_path = Path("/tmp/test-send-message-matrix.pdf")
+        doc_path = tmp_path / "test-send-message-matrix.pdf"
         doc_path.write_bytes(b"%PDF-1.4 test")
 
         try:

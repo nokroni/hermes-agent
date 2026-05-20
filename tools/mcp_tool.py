@@ -440,6 +440,8 @@ def _mcp_image_extension_for_mime_type(mime_type: str) -> str:
     """Return a reasonable file extension for an MCP image MIME type."""
     import mimetypes
     normalized = (mime_type or "").split(";", 1)[0].strip().lower()
+    if not normalized:
+        return ".png"
     if normalized in {"image/jpeg", "image/jpg"}:
         return ".jpg"
     return mimetypes.guess_extension(normalized) or ".png"

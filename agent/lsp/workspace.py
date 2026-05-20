@@ -38,7 +38,16 @@ def normalize_path(path: str) -> str:
     LSP servers (rust-analyzer cares about Cargo workspace identity)
     and we want the canonical path the user typed when possible.
     """
-    return os.path.abspath(os.path.expanduser(path))
+    expanded = path
+    if path == "~" or path.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            expanded = home + path[1:]
+        else:
+            expanded = os.path.expanduser(path)
+    else:
+        expanded = os.path.expanduser(path)
+    return os.path.abspath(expanded)
 
 
 def find_git_worktree(start: str) -> Optional[str]:

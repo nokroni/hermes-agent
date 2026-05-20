@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import signal
+import shutil
 import subprocess
 
 import pytest
@@ -32,6 +33,8 @@ FOREIGN_PID = 1
 
 
 def test_os_kill_blocks_foreign_pid():
+    if os.name == "nt":
+        pytest.skip("Windows os.kill semantics do not support POSIX foreign-PID SIGTERM checks")
     with pytest.raises(RuntimeError, match="live-system guard"):
         os.kill(FOREIGN_PID, signal.SIGTERM)
 
@@ -145,6 +148,8 @@ def test_os_popen_systemctl_blocked():
 
 
 def test_pty_spawn_systemctl_blocked():
+    if os.name == "nt":
+        pytest.skip("pty/termios is POSIX-only")
     import pty
     with pytest.raises(RuntimeError, match="live-system guard"):
         pty.spawn(["systemctl", "--user", "restart", "hermes-gateway"])
@@ -201,11 +206,32 @@ def test_subprocess_killall_hermes_blocked():
         subprocess.run(["killall", "hermes"])
 
 
+def test_subprocess_killall_python_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["killall", "python"])
+
+
+def test_subprocess_taskkill_hermes_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["taskkill", "/IM", "hermes-gateway.exe", "/F"])
+
+
+def test_subprocess_taskkill_python_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["taskkill", "/IM", "python.exe", "/F"])
+
+
 # ──────────────────── pass-through cases (must NOT raise) ──────
+
+
+def _skip_if_systemctl_missing():
+    if shutil.which("systemctl") is None:
+        pytest.skip("systemctl is not available on this host")
 
 
 def test_systemctl_status_passes_through():
     """Read-only systemctl probes (status/show/list-units) are fine."""
+    _skip_if_systemctl_missing()
     # Run with check=False so we don't fail on the gateway's exit code.
     r = subprocess.run(
         ["systemctl", "--user", "status", "hermes-gateway", "--no-pager"],
@@ -217,6 +243,7 @@ def test_systemctl_status_passes_through():
 
 
 def test_systemctl_show_passes_through():
+    _skip_if_systemctl_missing()
     r = subprocess.run(
         ["systemctl", "--user", "show", "hermes-gateway", "--no-pager"],
         capture_output=True,
@@ -227,6 +254,7 @@ def test_systemctl_show_passes_through():
 
 
 def test_systemctl_list_units_passes_through():
+    _skip_if_systemctl_missing()
     r = subprocess.run(
         ["systemctl", "--user", "list-units", "fake-not-real-unit*", "--no-pager"],
         capture_output=True,
@@ -238,10 +266,7 @@ def test_systemctl_list_units_passes_through():
 
 def test_systemctl_unrelated_unit_passes_through():
     """systemctl restart of a non-hermes unit is allowed (we only protect hermes)."""
-    # Use --dry-run so we don't actually try to restart anything; just
-    # verify the guard doesn't block the call. systemctl supports
-    # --dry-run via the privileged API; on user scope it usually fails
-    # quickly without side effects.
+    _skip_if_systemctl_missing()
     r = subprocess.run(
         ["systemctl", "--user", "show", "fake-not-real-unit"],
         capture_output=True,
@@ -258,8 +283,9 @@ def test_kill_own_subtree_passes_through():
         os.kill(p.pid, signal.SIGTERM)
     finally:
         p.wait(timeout=2)
-    # SIGTERM = 15; subprocess returncode is -15 on POSIX.
-    assert p.returncode in (-signal.SIGTERM, 128 + int(signal.SIGTERM))
+    # SIGTERM = 15; subprocess returncode is -15 on POSIX; Git Bash/MSYS on
+    # Windows reports the positive signal number.
+    assert p.returncode in (-signal.SIGTERM, int(signal.SIGTERM), 128 + int(signal.SIGTERM))
 
 
 def test_subprocess_pkill_with_unrelated_pattern_passes_through():

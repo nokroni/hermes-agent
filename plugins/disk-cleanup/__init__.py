@@ -42,7 +42,20 @@ _lock = threading.Lock()
 
 # Tool-call result shapes we can parse
 _WRITE_FILE_PATH_KEY = "path"
-_TERMINAL_PATH_REGEX = re.compile(r"(?:^|\s)(/[^\s'\"`]+|\~/[^\s'\"`]+)")
+_TERMINAL_PATH_REGEX = re.compile(
+    r"(?:^|\s)(/[^\s'\"`]+|\~/[^\s'\"`]+|[A-Za-z]:[\\/][^\s'\"`]+)"
+)
+_WINDOWS_DRIVE_PATH_REGEX = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def _is_candidate_terminal_path(value: str) -> bool:
+    return value.startswith(("/", "~")) or bool(_WINDOWS_DRIVE_PATH_REGEX.match(value))
 
 
 # ---------------------------------------------------------------------------
@@ -108,13 +121,16 @@ def _extract_paths_from_terminal(args: Dict[str, Any], result: str) -> Set[str]:
     cmd = args.get("command") or ""
     if isinstance(cmd, str) and cmd:
         # Tokenise the command — catches `touch /tmp/hermes-x/test_foo.py`
+        # and Windows absolute paths such as `touch C:\\Users\\...\\tmp.log`.
         try:
-            for tok in shlex.split(cmd, posix=True):
-                if tok.startswith(("/", "~")):
+            posix = not bool(re.search(r"[A-Za-z]:[\\/]", cmd))
+            for tok in shlex.split(cmd, posix=posix):
+                tok = _strip_wrapping_quotes(tok)
+                if _is_candidate_terminal_path(tok):
                     paths.add(tok)
         except ValueError:
             pass
-    # Only scan the result text if it's a reasonable size (avoid 50KB dumps).
+
     if isinstance(result, str) and len(result) < 4096:
         for match in _TERMINAL_PATH_REGEX.findall(result):
             paths.add(match)

@@ -98,4 +98,4 @@ def test_profile_command_reports_custom_root_profile(monkeypatch, tmp_path, caps
 
     out = capsys.readouterr().out
     assert "Profile: coder" in out
-    assert f"Home:    {profile_home}" in out
+    assert f"Home:    {profile_home.as_posix()}" in out

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from utils import atomic_json_write
+from utils import atomic_json_write, atomic_replace
 
 
 class TestAtomicJsonWrite:
@@ -157,3 +157,17 @@ class TestAtomicJsonWrite:
         result = json.loads(target.read_text())
         assert "writer" in result
         assert len(result["data"]) == 100
+
+    def test_atomic_replace_retries_transient_permission_error_on_windows(self, tmp_path):
+        """Windows may transiently deny os.replace during concurrent writes."""
+        source = tmp_path / "source.tmp"
+        target = tmp_path / "target.json"
+        source.write_text("{}", encoding="utf-8")
+
+        with patch("utils.os.name", "nt"), \
+             patch("utils.os.replace", side_effect=[PermissionError(13, "denied"), None]) as replace, \
+             patch("utils.time.sleep") as sleep:
+            assert atomic_replace(source, target) == str(target)
+
+        assert replace.call_count == 2
+        sleep.assert_called_once_with(0.001)

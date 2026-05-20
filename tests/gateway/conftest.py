@@ -38,6 +38,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
+class _FakeParseModeValue(str):
+    def __new__(cls, value: str, name: str):
+        obj = str.__new__(cls, value)
+        obj._name = name
+        return obj
+
+    def __repr__(self) -> str:
+        return f"<ParseMode.{self._name}: {str.__repr__(self)}>"
+
+
 
 def _ensure_telegram_mock() -> None:
     """Install a comprehensive telegram mock in sys.modules.
@@ -50,15 +60,23 @@ def _ensure_telegram_mock() -> None:
     if "telegram" in sys.modules and hasattr(sys.modules["telegram"], "__file__"):
         return  # Real library is installed — nothing to mock
 
+    from types import SimpleNamespace
+
     mod = MagicMock()
     mod.ext.ContextTypes.DEFAULT_TYPE = type(None)
-    mod.constants.ParseMode.MARKDOWN = "Markdown"
-    mod.constants.ParseMode.MARKDOWN_V2 = "MarkdownV2"
-    mod.constants.ParseMode.HTML = "HTML"
-    mod.constants.ChatType.PRIVATE = "private"
-    mod.constants.ChatType.GROUP = "group"
-    mod.constants.ChatType.SUPERGROUP = "supergroup"
-    mod.constants.ChatType.CHANNEL = "channel"
+    mod.ParseMode = SimpleNamespace(
+        MARKDOWN=_FakeParseModeValue("Markdown", "MARKDOWN"),
+        MARKDOWN_V2=_FakeParseModeValue("MarkdownV2", "MARKDOWN_V2"),
+        HTML=_FakeParseModeValue("HTML", "HTML"),
+    )
+    mod.ChatType = SimpleNamespace(
+        PRIVATE="private",
+        GROUP="group",
+        SUPERGROUP="supergroup",
+        CHANNEL="channel",
+    )
+    mod.constants.ParseMode = mod.ParseMode
+    mod.constants.ChatType = mod.ChatType
 
     # Real exception classes so ``except (NetworkError, ...)`` clauses
     # in production code don't blow up with TypeError.
@@ -81,6 +99,21 @@ def _ensure_telegram_mock() -> None:
     ):
         sys.modules[name] = mod
     sys.modules["telegram.error"] = mod.error
+
+    platform_mod = sys.modules.get("gateway.platforms.telegram")
+    if platform_mod is not None:
+        platform_mod.Update = mod.Update
+        platform_mod.Bot = mod.Bot
+        platform_mod.ParseMode = mod.ParseMode
+        platform_mod.ChatType = mod.ChatType
+        platform_mod.ContextTypes = mod.ext.ContextTypes
+        platform_mod.filters = mod.ext.filters
+        platform_mod.Application = mod.ext.Application
+        platform_mod.CommandHandler = mod.ext.CommandHandler
+        platform_mod.CallbackQueryHandler = mod.ext.CallbackQueryHandler
+        platform_mod.TelegramMessageHandler = mod.ext.MessageHandler
+        platform_mod.HTTPXRequest = mod.request.HTTPXRequest
+        platform_mod.TELEGRAM_AVAILABLE = True
 
 
 def _ensure_discord_mock() -> None:
@@ -110,9 +143,31 @@ def _ensure_discord_mock() -> None:
     discord_mod.ForumChannel = type("ForumChannel", (), {})
     discord_mod.Interaction = object
     discord_mod.Message = type("Message", (), {})
+    discord_mod.Object = lambda *, id: SimpleNamespace(id=id)
+    discord_mod.Forbidden = type("Forbidden", (Exception,), {})
+    discord_mod.HTTPException = type("HTTPException", (Exception,), {})
+    discord_mod.NotFound = type("NotFound", (Exception,), {})
+    discord_mod.MessageType = SimpleNamespace(
+        default=0,
+        reply=1,
+        channel_name_change=2,
+        pins_add=3,
+        new_member=4,
+        premium_guild_subscription=5,
+        recipient_add=6,
+    )
+
+    class _FakeAllowedMentions:
+        def __init__(self, *, everyone=True, roles=True, users=True, replied_user=True):
+            self.everyone = everyone
+            self.roles = roles
+            self.users = users
+            self.replied_user = replied_user
+
+    discord_mod.AllowedMentions = _FakeAllowedMentions
 
     # Embed: accept the kwargs production code / tests use
-    # (title, description, color). MagicMock auto-attributes work too,
+
     # but some tests construct and inspect .title/.description directly.
     class _FakeEmbed:
         def __init__(self, *, title=None, description=None, color=None, **_):
@@ -217,10 +272,16 @@ def _ensure_discord_mock() -> None:
     commands_mod.Bot = MagicMock
     ext_mod.commands = commands_mod
 
-    for name in ("discord", "discord.ext", "discord.ext.commands"):
-        sys.modules[name] = discord_mod
+    sys.modules["discord"] = discord_mod
     sys.modules["discord.ext"] = ext_mod
     sys.modules["discord.ext.commands"] = commands_mod
+    platform_mod = sys.modules.get("gateway.platforms.discord")
+    if platform_mod is not None:
+        platform_mod.discord = discord_mod
+        platform_mod.DiscordMessage = discord_mod.Message
+        platform_mod.Intents = discord_mod.Intents
+        platform_mod.commands = commands_mod
+        platform_mod.DISCORD_AVAILABLE = True
 
 
 # Run at collection time — before any test file's module-level imports.

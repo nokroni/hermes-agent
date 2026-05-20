@@ -592,10 +592,14 @@ class TestCursesRadiolist:
     def test_keyboard_interrupt_returns_cancel_value(self):
         from hermes_cli.curses_ui import curses_radiolist
 
-        with patch("sys.stdin") as mock_stdin, patch("curses.wrapper", side_effect=KeyboardInterrupt):
+        fake_curses = types.SimpleNamespace(
+            wrapper=MagicMock(side_effect=KeyboardInterrupt),
+        )
+        with patch("sys.stdin") as mock_stdin, patch.dict("sys.modules", {"curses": fake_curses}):
             mock_stdin.isatty.return_value = True
             result = curses_radiolist("Pick", ["x", "y"], selected=0, cancel_returns=-1)
             assert result == -1
+            fake_curses.wrapper.assert_called_once()
 
 
 # ── Provider discovery helpers ───────────────────────────────────────────

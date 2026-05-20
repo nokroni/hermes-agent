@@ -15,6 +15,7 @@ in ``command_link_dir`` and the venv entry point is left intact.
 
 from __future__ import annotations
 
+import os
 import re
 import stat
 import subprocess
@@ -25,6 +26,15 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
+
+
+def _bash_path(path: Path) -> str:
+    text = str(path)
+    drive = path.drive.rstrip(":")
+    if drive:
+        tail = text[len(path.drive):].replace("\\", "/").lstrip("/")
+        return f"/{drive.lower()}/{tail}"
+    return path.as_posix()
 
 
 def _extract_setup_path_shim_block() -> str:
@@ -90,14 +100,22 @@ def test_re_running_setup_path_block_preserves_pip_entry_point(tmp_path: Path) -
     assert shim_path.is_symlink()
 
     block = _extract_setup_path_shim_block()
-    # Drive the block with the real env vars setup_path() sets.
-    script = f'set -e\nHERMES_BIN={pip_entry!s}\ncommand_link_dir={command_link_dir!s}\n{block}\n'
+    # Drive the block with the real env vars setup_path() sets.  Use MSYS paths
+    # because this snippet runs under bash even on native Windows.
+    pip_entry_for_bash = _bash_path(pip_entry)
+    command_link_dir_for_bash = _bash_path(command_link_dir)
+    script = (
+        f'set -e\nHERMES_BIN={pip_entry_for_bash}\n'
+        f'command_link_dir={command_link_dir_for_bash}\n{block}\n'
+    )
+
     result = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
         text=True,
         cwd=tmp_path,
     )
+
     assert result.returncode == 0, (
         f"shim-write block failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     )
@@ -118,6 +136,7 @@ def test_re_running_setup_path_block_preserves_pip_entry_point(tmp_path: Path) -
     shim_text = shim_path.read_text()
     assert "unset PYTHONPATH" in shim_text
     assert "unset PYTHONHOME" in shim_text
-    assert f'exec "{pip_entry}"' in shim_text
+    assert f'exec "{pip_entry_for_bash}"' in shim_text
     shim_mode = shim_path.stat().st_mode
-    assert shim_mode & stat.S_IXUSR, "shim must be user-executable"
+    if os.name != "nt":
+        assert shim_mode & stat.S_IXUSR, "shim must be user-executable"

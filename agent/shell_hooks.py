@@ -360,6 +360,38 @@ def _parse_single_entry(
 _TOP_LEVEL_PAYLOAD_KEYS = {"tool_name", "args", "session_id", "parent_session_id"}
 
 
+def _expand_home_prefix(value: str) -> str:
+    """Expand a leading ``~`` using HOME when tests/config isolate it."""
+    if value == "~" or value.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            if value == "~":
+                return home
+            return home.rstrip("/\\") + value[1:]
+    return os.path.expanduser(value)
+
+
+def _split_command(command: str) -> List[str]:
+    """Split a configured hook command without corrupting Windows paths."""
+    if not sys.platform.startswith("win"):
+        return shlex.split(command)
+    return [part.strip("'\"") for part in shlex.split(command, posix=False)]
+
+
+def _windows_shell_script_argv(argv: List[str]) -> List[str]:
+    """Run .sh/.bash hook scripts through bash on native Windows.
+
+    POSIX platforms execute scripts via the shebang. Native Windows does not,
+    even when Git Bash is the user's Hermes shell, so a direct subprocess call
+    to C:/.../hook.sh fails before the hook can return its JSON directive.
+    """
+    if not sys.platform.startswith("win") or not argv:
+        return argv
+    if Path(argv[0]).suffix.lower() not in {".sh", ".bash"}:
+        return argv
+    return ["bash", argv[0].replace("\\", "/"), *argv[1:]]
+
+
 def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
     """Run ``spec.command`` as a subprocess with ``stdin_json`` on stdin.
 
@@ -379,13 +411,14 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
         "error": None,
     }
     try:
-        argv = shlex.split(os.path.expanduser(spec.command))
+        argv = [_expand_home_prefix(part) for part in _split_command(spec.command)]
     except ValueError as exc:
         result["error"] = f"command {spec.command!r} cannot be parsed: {exc}"
         return result
     if not argv:
         result["error"] = "empty command"
         return result
+    argv = _windows_shell_script_argv(argv)
 
     t0 = time.monotonic()
     try:
@@ -416,7 +449,6 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
     result["stderr"] = proc.stderr or ""
     result["elapsed_seconds"] = round(time.monotonic() - t0, 3)
     return result
-
 
 def _make_callback(spec: ShellHookSpec) -> Callable[..., Optional[Dict[str, Any]]]:
     """Build the closure that ``invoke_hook()`` will call per firing."""
@@ -721,7 +753,7 @@ def _command_script_path(command: str) -> str:
     common bare-path form.
     """
     try:
-        parts = shlex.split(command)
+        parts = _split_command(command)
     except ValueError:
         return command
     if not parts:
@@ -785,7 +817,7 @@ def script_mtime_iso(command: str) -> Optional[str]:
     if not path:
         return None
     try:
-        expanded = os.path.expanduser(path)
+        expanded = _expand_home_prefix(path)
         return datetime.fromtimestamp(
             os.path.getmtime(expanded), tz=timezone.utc,
         ).isoformat().replace("+00:00", "Z")
@@ -804,11 +836,11 @@ def script_is_executable(command: str) -> bool:
     path = _command_script_path(command)
     if not path:
         return False
-    expanded = os.path.expanduser(path)
+    expanded = _expand_home_prefix(path)
     if not os.path.isfile(expanded):
         return False
     try:
-        argv = shlex.split(command)
+        argv = _split_command(command)
     except ValueError:
         return False
     is_bare_invocation = bool(argv) and argv[0] == path

@@ -334,3 +334,38 @@ async def test_blocks_sensitive_home_and_hermes_paths(tmp_path: Path, monkeypatc
     assert "API_KEY=super-secret" not in result.message
     assert "PRIVATE-KEY" not in result.message
     assert any("sensitive credential" in warning for warning in result.warnings)
+
+
+def test_tilde_reference_uses_env_home_and_does_not_leak_expanduser_home(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """HOME-isolated runs must read ~ from $HOME, not os.path.expanduser("~")."""
+    from agent.context_references import preprocess_context_references
+
+    env_home = tmp_path / "env-home"
+    expanduser_home = tmp_path / "expanduser-home"
+    env_home.mkdir()
+    expanduser_home.mkdir()
+    (env_home / "sentinel.txt").write_text("ENV-HOME\n", encoding="utf-8")
+    (expanduser_home / "sentinel.txt").write_text("EXPANDUSER-HOME\n", encoding="utf-8")
+
+    def fake_expanduser(value: str) -> str:
+        if value == "~" or value.startswith(("~/", "~\\")):
+            return str(expanduser_home) + value[1:]
+        return value
+
+    monkeypatch.setenv("HOME", str(env_home))
+    monkeypatch.setenv("HERMES_HOME", str(env_home / ".hermes"))
+    monkeypatch.setattr("agent.context_references.os.path.expanduser", fake_expanduser)
+
+    result = preprocess_context_references(
+        "read @file:~/sentinel.txt",
+        cwd=expanduser_home,
+        allowed_root=tmp_path,
+        context_length=100_000,
+    )
+
+    assert "ENV-HOME" in result.message
+    assert "EXPANDUSER-HOME" not in result.message
+    assert not result.warnings

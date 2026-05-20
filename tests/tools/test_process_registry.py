@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -53,6 +54,21 @@ def _spawn_python_sleep(seconds: float) -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-c", f"import time; time.sleep({seconds})"],
     )
+
+
+def _bash_path(path: Path) -> str:
+    """Return a shell-readable path for the Git Bash shell used by spawn_local."""
+    text = str(path)
+    drive = path.drive.rstrip(":")
+    if drive:
+        tail = text[len(path.drive):].replace("\\", "/").lstrip("/")
+        return f"/{drive.lower()}/{tail}"
+    return path.as_posix()
+
+
+def _python_shell_command(script: str) -> str:
+    """Build a portable Python command for spawn_local's shell execution path."""
+    return f"{shlex.quote(_bash_path(Path(sys.executable)))} -c {shlex.quote(script)}"
 
 
 def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
@@ -297,7 +313,7 @@ class TestStdinHelpers:
 
     def test_close_stdin_allows_eof_driven_process_to_finish(self, registry, tmp_path):
         session = registry.spawn_local(
-            'python3 -c "import sys; print(sys.stdin.read().strip())"',
+            _python_shell_command("import sys; print(sys.stdin.read().strip())"),
             cwd=str(tmp_path),
             use_pty=False,
         )
@@ -828,20 +844,25 @@ class TestKillProcess:
             def terminate(self):
                 terminate_calls.append(("terminate", self.pid))
 
-        import psutil as _psutil
-
         try:
             # Post-#21561: liveness probe routes through
             # ``ProcessRegistry._is_host_pid_alive`` (→
-            # ``gateway.status._pid_exists``), and the actual kill on POSIX
-            # routes through ``psutil.Process(pid).terminate()``. Neither
-            # touches ``os.kill`` directly. Mock both seams.
-            with patch("gateway.status._pid_exists", return_value=True), \
-                 patch.object(_psutil, "Process", side_effect=lambda pid: FakeProcess(pid)):
-                result = registry.kill_process(s.id)
+            # ``gateway.status._pid_exists``). The kill seam is platform-specific:
+            # POSIX uses psutil for process trees, Windows uses os.kill for the
+            # host-visible PID because there is no original Popen handle.
+            if os.name == "nt":
+                with patch("gateway.status._pid_exists", return_value=True), \
+                     patch("tools.process_registry.os.kill") as kill_mock:
+                    result = registry.kill_process(s.id)
+                kill_mock.assert_called_once_with(424242, signal.SIGTERM)
+            else:
+                import psutil as _psutil
+                with patch("gateway.status._pid_exists", return_value=True), \
+                     patch.object(_psutil, "Process", side_effect=lambda pid: FakeProcess(pid)):
+                    result = registry.kill_process(s.id)
+                assert ("terminate", 424242) in terminate_calls
 
             assert result["status"] == "killed"
-            assert ("terminate", 424242) in terminate_calls
         finally:
             registry._running.pop(s.id, None)
 

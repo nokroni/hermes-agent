@@ -26,6 +26,21 @@ def test_display_toolset_name_handles_empty():
     assert banner._display_toolset_name(None) == "unknown"
 
 
+def test_cprint_plain_print_fallback_when_prompt_toolkit_output_fails(monkeypatch):
+    printed = []
+
+    def _raise_no_console(_value):
+        raise RuntimeError("no console screen buffer")
+
+    monkeypatch.setattr(banner, "_pt_print", _raise_no_console)
+    monkeypatch.setattr(banner, "_PT_ANSI", lambda text: ("ANSI", text))
+    monkeypatch.setattr("builtins.print", lambda value: printed.append(value))
+
+    banner.cprint("fallback")
+
+    assert printed == ["fallback"]
+
+
 def test_build_welcome_banner_uses_normalized_toolset_names():
     """Unavailable toolsets should not have '_tools' appended in banner output."""
     with (
@@ -89,7 +104,13 @@ def test_build_welcome_banner_title_is_hyperlinked_to_release():
         _patch.object(_mcp, "get_mcp_status", return_value=[]),
         _patch.object(_banner, "get_latest_release_tag", return_value=tag_url),
     ):
-        console = Console(file=buf, force_terminal=True, color_system="truecolor", width=160)
+        console = Console(
+            file=buf,
+            force_terminal=True,
+            color_system="truecolor",
+            width=160,
+            legacy_windows=False,
+        )
         _banner.build_welcome_banner(
             console=console, model="x", cwd="/tmp",
             session_id="abc123",

@@ -312,11 +312,14 @@ class TestSanePathIncludesHomebrew:
 
     def test_make_run_env_appends_homebrew_on_minimal_path(self):
         """When PATH is minimal (no /usr/bin), _make_run_env should append
-        _SANE_PATH which now includes Homebrew dirs."""
+        _SANE_PATH which now includes Homebrew dirs on POSIX hosts."""
         from tools.environments.local import _make_run_env
         minimal_env = {"PATH": "/some/custom/bin"}
         with patch.dict(os.environ, minimal_env, clear=True):
             result = _make_run_env({})
+        if os.name == "nt":
+            assert result["PATH"] == minimal_env["PATH"]
+            return
         assert "/opt/homebrew/bin" in result["PATH"]
         assert "/opt/homebrew/sbin" in result["PATH"]
 

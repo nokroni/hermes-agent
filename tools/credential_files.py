@@ -309,7 +309,7 @@ def iter_skills_files(
         for item in skills_dir.rglob("*"):
             if item.is_symlink() or not item.is_file():
                 continue
-            rel = item.relative_to(skills_dir)
+            rel = item.relative_to(skills_dir).as_posix()
             result.append({
                 "host_path": str(item),
                 "container_path": f"{container_root}/{rel}",
@@ -325,7 +325,7 @@ def iter_skills_files(
             for item in ext_dir.rglob("*"):
                 if item.is_symlink() or not item.is_file():
                     continue
-                rel = item.relative_to(ext_dir)
+                rel = item.relative_to(ext_dir).as_posix()
                 result.append({
                     "host_path": str(item),
                     "container_path": f"{container_root}/{rel}",
@@ -395,8 +395,8 @@ def to_agent_visible_cache_path(
     for mount in get_cache_directory_mounts(container_base=container_base):
         host_dir = Path(mount["host_path"])
         try:
-            rel = path.relative_to(host_dir)
-            return str(Path(mount["container_path"]) / rel)
+            rel = path.relative_to(host_dir).as_posix()
+            return f"{mount['container_path'].rstrip('/')}/{rel}"
         except ValueError:
             continue
     return host_path
@@ -421,7 +421,7 @@ def iter_cache_files(
         for item in host_dir.rglob("*"):
             if item.is_symlink() or not item.is_file():
                 continue
-            rel = item.relative_to(host_dir)
+            rel = item.relative_to(host_dir).as_posix()
             result.append({
                 "host_path": str(item),
                 "container_path": f"{container_root}/{rel}",

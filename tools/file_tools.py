@@ -162,14 +162,26 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
     except (OSError, ValueError):
         resolved = filepath
     normalized = os.path.normpath(os.path.expanduser(filepath))
+    # On Windows, normpath('/etc/hosts') becomes '\\etc\\hosts'.  Preserve a
+    # slash-normalized view of both the literal and resolved paths so POSIX
+    # sensitive prefixes are still blocked when tests/tools pass POSIX paths
+    # through a native Python process.
+    resolved_slash = os.path.normpath(resolved).replace("\\", "/")
+    normalized_slash = normalized.replace("\\", "/")
     _err = (
         f"Refusing to write to sensitive system path: {filepath}\n"
         "Use the terminal tool with sudo if you need to modify system files."
     )
     for prefix in _SENSITIVE_PATH_PREFIXES:
-        if resolved.startswith(prefix) or normalized.startswith(prefix):
+        if any(
+            candidate.startswith(prefix)
+            for candidate in (resolved, normalized, resolved_slash, normalized_slash)
+        ):
             return _err
-    if resolved in _SENSITIVE_EXACT_PATHS or normalized in _SENSITIVE_EXACT_PATHS:
+    if any(
+        candidate in _SENSITIVE_EXACT_PATHS
+        for candidate in (resolved, normalized, resolved_slash, normalized_slash)
+    ):
         return _err
     return None
 

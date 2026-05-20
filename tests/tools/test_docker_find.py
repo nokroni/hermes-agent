@@ -8,6 +8,15 @@ import pytest
 from tools.environments import docker as docker_mod
 
 
+def _fake_executable_path(tmp_path, name="docker"):
+    """Create a fake path that passes host executable discovery checks."""
+    suffix = ".exe" if os.name == "nt" else ""
+    fake_binary = tmp_path / f"{name}{suffix}"
+    fake_binary.write_text("#!/bin/sh\n")
+    fake_binary.chmod(0o755)
+    return fake_binary
+
+
 @pytest.fixture(autouse=True)
 def _reset_cache():
     """Clear the module-level docker executable cache between tests."""
@@ -24,9 +33,7 @@ class TestFindDocker:
 
     def test_not_in_path_falls_back_to_known_locations(self, tmp_path):
         # Create a fake docker binary at a known path
-        fake_docker = tmp_path / "docker"
-        fake_docker.write_text("#!/bin/sh\n")
-        fake_docker.chmod(0o755)
+        fake_docker = _fake_executable_path(tmp_path)
 
         with patch("tools.environments.docker.shutil.which", return_value=None), \
              patch("tools.environments.docker._DOCKER_SEARCH_PATHS", [str(fake_docker)]):
@@ -49,9 +56,7 @@ class TestFindDocker:
 
     def test_env_var_override_takes_precedence(self, tmp_path):
         """HERMES_DOCKER_BINARY overrides PATH and known-location discovery."""
-        fake_binary = tmp_path / "podman"
-        fake_binary.write_text("#!/bin/sh\n")
-        fake_binary.chmod(0o755)
+        fake_binary = _fake_executable_path(tmp_path, "podman")
 
         with patch.dict(os.environ, {"HERMES_DOCKER_BINARY": str(fake_binary)}), \
              patch("tools.environments.docker.shutil.which", return_value="/usr/bin/docker"):

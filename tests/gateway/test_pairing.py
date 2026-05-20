@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from gateway.pairing import (
     PairingStore,
     ALPHABET,
@@ -38,6 +40,9 @@ class TestSecureWrite:
         assert json.loads(target.read_text()) == {"hello": "world"}
 
     def test_sets_file_permissions(self, tmp_path):
+        if os.name == "nt":
+            pytest.skip("Windows reports DOS-style permission bits; chmod(0600) is not reliable.")
+
         target = tmp_path / "secret.json"
         _secure_write(target, "data")
         mode = oct(target.stat().st_mode & 0o777)

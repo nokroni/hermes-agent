@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from io import StringIO
 
 import pytest
@@ -118,6 +117,70 @@ class _FakeAgent:
         pass
 
 
+class _MemoryTransport(asyncio.Transport):
+    """In-memory write transport that feeds bytes to a peer StreamReader."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, peer: asyncio.StreamReader):
+        super().__init__()
+        self._loop = loop
+        self._peer = peer
+        self._protocol: asyncio.BaseProtocol | None = None
+        self._closing = False
+
+    def set_protocol(self, protocol: asyncio.BaseProtocol) -> None:
+        self._protocol = protocol
+
+    def get_protocol(self) -> asyncio.BaseProtocol | None:
+        return self._protocol
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def write(self, data: bytes) -> None:
+        if self._closing:
+            raise RuntimeError("transport is closing")
+        self._peer.feed_data(data)
+
+    def writelines(self, list_of_data) -> None:  # noqa: ANN001
+        for data in list_of_data:
+            self.write(data)
+
+    def can_write_eof(self) -> bool:
+        return True
+
+    def write_eof(self) -> None:
+        if not self._closing:
+            self._peer.feed_eof()
+
+    def close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._peer.feed_eof()
+        if self._protocol is not None:
+            self._loop.call_soon(self._protocol.connection_lost, None)
+
+    def get_extra_info(self, name: str, default=None):  # noqa: ANN001, ANN201
+        return default
+
+
+def _make_memory_stream_pair(loop: asyncio.AbstractEventLoop):
+    """Return two connected (reader, writer) stream endpoints."""
+    left_reader = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
+    right_reader = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
+    left_protocol = asyncio.StreamReaderProtocol(left_reader, loop=loop)
+    right_protocol = asyncio.StreamReaderProtocol(right_reader, loop=loop)
+    left_transport = _MemoryTransport(loop, right_reader)
+    right_transport = _MemoryTransport(loop, left_reader)
+    left_transport.set_protocol(left_protocol)
+    right_transport.set_protocol(right_protocol)
+    left_protocol.connection_made(left_transport)
+    right_protocol.connection_made(right_transport)
+    left_writer = asyncio.StreamWriter(left_transport, left_protocol, left_reader, loop)
+    right_writer = asyncio.StreamWriter(right_transport, right_protocol, right_reader, loop)
+    return (left_reader, left_writer), (right_reader, right_writer)
+
+
 @pytest.mark.asyncio
 async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
     caplog: pytest.LogCaptureFixture,
@@ -125,7 +188,7 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
     """A bare ``ping`` must get a JSON-RPC -32601 back AND leave stderr clean
     when the filter is installed on the handler.
     """
-    import acp
+
 
     # Attach the filter to a fresh stream handler that mirrors entry._setup_logging.
     stream = StringIO()
@@ -140,33 +203,12 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
     # Also suppress propagation of caplog's default handler interfering with
     # our stream (caplog still captures via its own propagation hook).
     try:
+        import acp
+
         loop = asyncio.get_running_loop()
-
-        # Pipe client -> agent
-        client_to_agent_r, client_to_agent_w = os.pipe()
-        # Pipe agent -> client
-        agent_to_client_r, agent_to_client_w = os.pipe()
-
-        in_read_file = os.fdopen(client_to_agent_r, "rb", buffering=0)
-        in_write_file = os.fdopen(client_to_agent_w, "wb", buffering=0)
-        out_read_file = os.fdopen(agent_to_client_r, "rb", buffering=0)
-        out_write_file = os.fdopen(agent_to_client_w, "wb", buffering=0)
-
-        # Agent reads its input from this StreamReader:
-        agent_input = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
-        agent_input_proto = asyncio.StreamReaderProtocol(agent_input, loop=loop)
-        await loop.connect_read_pipe(lambda: agent_input_proto, in_read_file)
-
-        # Agent writes its output via this StreamWriter:
-        out_transport, out_protocol = await loop.connect_write_pipe(
-            asyncio.streams.FlowControlMixin, out_write_file
+        (client_input, client_output), (agent_input, agent_output) = (
+            _make_memory_stream_pair(loop)
         )
-        agent_output = asyncio.StreamWriter(out_transport, out_protocol, None, loop)
-
-        # Test harness reads agent output via this StreamReader:
-        client_input = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
-        client_input_proto = asyncio.StreamReaderProtocol(client_input, loop=loop)
-        await loop.connect_read_pipe(lambda: client_input_proto, out_read_file)
 
         agent_task = asyncio.create_task(
             acp.run_agent(
@@ -179,8 +221,8 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
 
         # Send a bare `ping`
         request = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
-        in_write_file.write((json.dumps(request) + "\n").encode())
-        in_write_file.flush()
+        client_output.write((json.dumps(request) + "\n").encode())
+        await client_output.drain()
 
         response_line = await asyncio.wait_for(client_input.readline(), timeout=5.0)
         # Give the supervisor task a tick to fire (filter should eat it)
@@ -196,7 +238,7 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
         )
 
         # Clean shutdown
-        in_write_file.close()
+        client_output.close()
         try:
             await asyncio.wait_for(agent_task, timeout=2.0)
         except (asyncio.TimeoutError, Exception):

@@ -57,6 +57,7 @@ from acp.schema import (
     UserMessageChunk,
 )
 
+from hermes_constants import is_wsl
 from acp_adapter.auth import TERMINAL_SETUP_AUTH_METHOD_ID, build_auth_methods, detect_provider
 from acp_adapter.events import (
     make_message_cb,
@@ -145,32 +146,43 @@ def _path_from_file_uri(uri: str) -> Path | None:
 
     Zed may send POSIX file URIs from Linux/WSL workspaces or Windows-ish paths
     when launched through wsl.exe. Translate the common Windows drive form to
-    /mnt/<drive>/... so Hermes running in WSL can read it.
+    /mnt/<drive>/... only when Hermes itself is running in WSL. Native Windows
+    Hermes must keep C:/... paths readable as Windows paths.
     """
     raw = (uri or "").strip()
     if not raw:
         return None
 
-    parsed = urlparse(raw)
-    if parsed.scheme and parsed.scheme != "file":
-        return None
-
-    if parsed.scheme == "file":
-        if parsed.netloc and parsed.netloc not in {"", "localhost"}:
-            return None
-        path_text = unquote(parsed.path or "")
+    # urlparse treats raw Windows paths like C:\Users\... as scheme "c".
+    # Handle absolute drive paths before parsing file:// URIs, but do not
+    # mistake one-letter URI schemes like x:foo for local files.
+    if len(raw) >= 3 and raw[1] == ":" and raw[0].isalpha() and raw[2] in {"/", "\\"}:
+        path_text = raw
     else:
-        path_text = unquote(raw)
+        parsed = urlparse(raw)
+        if parsed.scheme and parsed.scheme != "file":
+            return None
+
+        if parsed.scheme == "file":
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                return None
+            path_text = unquote(parsed.path or "")
+        else:
+            path_text = unquote(raw)
 
     # file:///C:/Users/... or C:\Users\...
     if len(path_text) >= 3 and path_text[0] == "/" and path_text[2] == ":" and path_text[1].isalpha():
-        drive = path_text[1].lower()
+        drive = path_text[1]
         rest = path_text[3:].lstrip("/\\").replace("\\", "/")
-        return Path("/mnt") / drive / rest
-    if len(path_text) >= 2 and path_text[1] == ":" and path_text[0].isalpha():
-        drive = path_text[0].lower()
+        if is_wsl():
+            return Path("/mnt") / drive.lower() / rest
+        return Path(f"{drive}:/{rest}")
+    if len(path_text) >= 3 and path_text[1] == ":" and path_text[0].isalpha() and path_text[2] in {"/", "\\"}:
+        drive = path_text[0]
         rest = path_text[2:].lstrip("/\\").replace("\\", "/")
-        return Path("/mnt") / drive / rest
+        if is_wsl():
+            return Path("/mnt") / drive.lower() / rest
+        return Path(f"{drive}:/{rest}")
 
     return Path(path_text)
 

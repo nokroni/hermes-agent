@@ -5,10 +5,36 @@ without risk of circular imports.
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 
 _profile_fallback_warned: bool = False
+_fallback_no_os_home: Path | None = None
+
+
+def _fallback_home_when_os_home_unavailable() -> Path:
+    """Return a secure per-process fallback when the OS cannot resolve home."""
+    global _fallback_no_os_home
+    if _fallback_no_os_home is None:
+        path = Path(tempfile.mkdtemp(prefix="hermes-home-"))
+        try:
+            path.chmod(0o700)
+        except OSError:
+            # Windows ACLs and unusual filesystems may ignore POSIX modes.
+            # ``mkdtemp`` still gives us an atomically-created, unguessable
+            # directory instead of a predictable temp path.
+            pass
+        _fallback_no_os_home = path
+    return _fallback_no_os_home
+
+
+def _safe_user_home() -> Path | None:
+    """Return Path.home(), or None when the process environment has no home."""
+    try:
+        return Path.home()
+    except RuntimeError:
+        return None
 
 
 def get_hermes_home() -> Path:
@@ -31,6 +57,10 @@ def get_hermes_home() -> Path:
     if val:
         return Path(val)
 
+    home = _safe_user_home()
+    if home is None:
+        return _fallback_home_when_os_home_unavailable()
+
     # Guard: if a non-default profile is sticky-active, warn once that
     # the fallback to the default profile is almost certainly wrong.
     global _profile_fallback_warned
@@ -39,7 +69,7 @@ def get_hermes_home() -> Path:
             # Inline the default-root resolution from get_default_hermes_root()
             # to stay import-safe (this function is called from module scope
             # in 30+ files; we cannot afford to trigger logging setup here).
-            active_path = (Path.home() / ".hermes" / "active_profile")
+            active_path = (home / ".hermes" / "active_profile")
             active = active_path.read_text().strip() if active_path.exists() else ""
         except (UnicodeDecodeError, OSError):
             active = ""
@@ -65,7 +95,7 @@ def get_hermes_home() -> Path:
             except Exception:
                 pass
 
-    return Path.home() / ".hermes"
+    return home / ".hermes"
 
 
 def get_default_hermes_root() -> Path:
@@ -84,7 +114,8 @@ def get_default_hermes_root() -> Path:
 
     Import-safe — no dependencies beyond stdlib.
     """
-    native_home = Path.home() / ".hermes"
+    user_home = _safe_user_home()
+    native_home = user_home / ".hermes" if user_home is not None else _fallback_home_when_os_home_unavailable()
     env_home = os.environ.get("HERMES_HOME", "")
     if not env_home:
         return native_home
@@ -156,10 +187,13 @@ def display_hermes_home() -> str:
     :func:`get_hermes_home` instead.
     """
     home = get_hermes_home()
+    user_home = _safe_user_home()
+    if user_home is None:
+        return home.as_posix()
     try:
-        return "~/" + str(home.relative_to(Path.home()))
+        return "~/" + home.relative_to(user_home).as_posix()
     except ValueError:
-        return str(home)
+        return home.as_posix()
 
 
 def get_subprocess_home() -> str | None:

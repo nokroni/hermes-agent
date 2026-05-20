@@ -208,12 +208,13 @@ def _build_skill_message(
             if subdir_path.exists():
                 for f in sorted(subdir_path.rglob("*")):
                     if f.is_file() and not f.is_symlink():
-                        rel = str(f.relative_to(skill_dir))
+                        rel = f.relative_to(skill_dir).as_posix()
                         supporting.append(rel)
 
     if supporting and skill_dir:
+        supporting = [str(sf).replace("\\", "/") for sf in supporting]
         try:
-            skill_view_target = str(skill_dir.relative_to(SKILLS_DIR))
+            skill_view_target = skill_dir.relative_to(SKILLS_DIR).as_posix()
         except ValueError:
             # Skill is from an external dir — use the skill name instead
             skill_view_target = skill_dir.name

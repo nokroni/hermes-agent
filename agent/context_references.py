@@ -326,8 +326,30 @@ async def _default_url_fetcher(url: str) -> str:
     return str(doc.get("content") or doc.get("raw_content") or "").strip()
 
 
+def _expand_user_path(value: str) -> str:
+    if value == "~" or value.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            return home.rstrip("/\\") + value[1:]
+    return os.path.expanduser(value)
+
+
+def _home_path_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for home_text in (os.environ.get("HOME"), os.path.expanduser("~")):
+        if not home_text or home_text == "~":
+            continue
+        try:
+            home = Path(home_text).expanduser().resolve()
+        except Exception:
+            continue
+        if home not in candidates:
+            candidates.append(home)
+    return candidates
+
+
 def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -> Path:
-    path = Path(os.path.expanduser(target))
+    path = Path(_expand_user_path(target))
     if not path.is_absolute():
         path = cwd / path
     resolved = path.resolve()
@@ -341,12 +363,13 @@ def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -
 
 def _ensure_reference_path_allowed(path: Path) -> None:
     from hermes_constants import get_hermes_home
-    home = Path(os.path.expanduser("~")).resolve()
+
+    homes = _home_path_candidates()
     hermes_home = get_hermes_home().resolve()
 
-    blocked_exact = {home / rel for rel in _SENSITIVE_HOME_FILES}
+    blocked_exact = {home / rel for home in homes for rel in _SENSITIVE_HOME_FILES}
     blocked_exact.add(hermes_home / ".env")
-    blocked_dirs = [home / rel for rel in _SENSITIVE_HOME_DIRS]
+    blocked_dirs = [home / rel for home in homes for rel in _SENSITIVE_HOME_DIRS]
     blocked_dirs.extend(hermes_home / rel for rel in _SENSITIVE_HERMES_DIRS)
 
     if path in blocked_exact:

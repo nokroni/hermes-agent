@@ -138,6 +138,9 @@ def test_save_qwen_cli_tokens_creates_parent(qwen_env):
 
 
 def test_save_qwen_cli_tokens_permissions(qwen_env):
+    if os.name == "nt":
+        pytest.skip("Windows reports DOS-style permission bits; chmod(0600) is not reliable.")
+
     tokens = _make_qwen_tokens()
     saved_path = _save_qwen_cli_tokens(tokens)
     mode = saved_path.stat().st_mode

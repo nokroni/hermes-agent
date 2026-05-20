@@ -395,12 +395,19 @@ class TestSearchFilesFallbackHiddenPaths:
         env.cwd = "/"
 
         def execute(command, **kwargs):
-            completed = subprocess.run(
-                command,
-                shell=True,
-                text=True,
-                capture_output=True,
-            )
+            if os.name == "nt":
+                completed = subprocess.run(
+                    ["bash", "-lc", command],
+                    text=True,
+                    capture_output=True,
+                )
+            else:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    text=True,
+                    capture_output=True,
+                )
             return {
                 "output": completed.stdout,
                 "returncode": completed.returncode,
@@ -427,7 +434,10 @@ class TestSearchFilesFallbackHiddenPaths:
         result = ops._search_files("*.log", str(root), limit=50, offset=0)
 
         assert result.error is None
-        assert set(result.files) == {str(visible_file), str(visible_nested_file)}
+        assert {Path(p).resolve() for p in result.files} == {
+            visible_file.resolve(),
+            visible_nested_file.resolve(),
+        }
 
     def test_normal_root_still_excludes_hidden_descendants(self, tmp_path, monkeypatch):
         """Fallback find should still exclude hidden descendant paths for normal roots."""
@@ -446,7 +456,10 @@ class TestSearchFilesFallbackHiddenPaths:
         result = ops._search_files("*.log", str(root), limit=50, offset=0)
 
         assert result.error is None
-        assert set(result.files) == {str(visible_file), str(visible_nested_file)}
+        assert {Path(p).resolve() for p in result.files} == {
+            visible_file.resolve(),
+            visible_nested_file.resolve(),
+        }
 
 
 class TestShellFileOpsWriteDenied:

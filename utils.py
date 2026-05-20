@@ -5,6 +5,7 @@ import logging
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Union
 from urllib.parse import urlparse
@@ -78,7 +79,17 @@ def atomic_replace(tmp_path: Union[str, Path], target: Union[str, Path]) -> str:
     """
     target_str = str(target)
     real_path = os.path.realpath(target_str) if os.path.islink(target_str) else target_str
-    os.replace(str(tmp_path), real_path)
+    for delay in (0.001, 0.005, 0.025, 0.1, None):
+        try:
+            os.replace(str(tmp_path), real_path)
+            return real_path
+        except PermissionError:
+            # Windows can transiently deny a replace when concurrent writers are
+            # racing on the same target.  The temp file is still intact, so a
+            # short retry preserves atomicity without weakening hard failures.
+            if os.name != "nt" or delay is None:
+                raise
+            time.sleep(delay)
     return real_path
 
 

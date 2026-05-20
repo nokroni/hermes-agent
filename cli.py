@@ -1769,10 +1769,19 @@ def _cprint(text: str):
     """
     _record_output_history(text)
 
+    def _direct_print() -> None:
+        try:
+            _pt_print(_PT_ANSI(text))
+        except Exception:
+            try:
+                print(text)
+            except Exception:
+                pass
+
     try:
         from prompt_toolkit.application import get_app_or_none, run_in_terminal
     except Exception:
-        _pt_print(_PT_ANSI(text))
+        _direct_print()
         return
 
     app = None
@@ -1785,7 +1794,7 @@ def _cprint(text: str):
     # direct prompt_toolkit print is safe and matches existing behavior
     # (spinner frames, streamed tokens, tool activity prefixes, …).
     if app is None or not getattr(app, "_is_running", False):
-        _pt_print(_PT_ANSI(text))
+        _direct_print()
         return
 
     try:
@@ -1793,7 +1802,7 @@ def _cprint(text: str):
     except Exception:
         loop = None
     if loop is None:
-        _pt_print(_PT_ANSI(text))
+        _direct_print()
         return
 
     import asyncio as _asyncio
@@ -1809,7 +1818,7 @@ def _cprint(text: str):
         current_loop = None
     # Same thread as the app's loop → safe to print directly.
     if current_loop is loop and loop.is_running():
-        _pt_print(_PT_ANSI(text))
+        _direct_print()
         return
 
     # Cross-thread emission: ask the app's event loop to schedule a
@@ -1818,20 +1827,14 @@ def _cprint(text: str):
     # fails we fall back to a direct print so the line isn't lost.
     def _schedule():
         try:
-            run_in_terminal(lambda: _pt_print(_PT_ANSI(text)))
+            run_in_terminal(_direct_print)
         except Exception:
-            try:
-                _pt_print(_PT_ANSI(text))
-            except Exception:
-                pass
+            _direct_print()
 
     try:
         loop.call_soon_threadsafe(_schedule)
     except Exception:
-        try:
-            _pt_print(_PT_ANSI(text))
-        except Exception:
-            pass
+        _direct_print()
 
 
 # ---------------------------------------------------------------------------
@@ -1857,8 +1860,8 @@ def _termux_example_image_path(filename: str = "cat.png") -> str:
     ]
     for root in candidates:
         if os.path.isdir(root):
-            return os.path.join(root, "Pictures", filename)
-    return os.path.join("~/storage/shared", "Pictures", filename)
+            return f"{root.rstrip('/')}/Pictures/{filename}"
+    return f"~/storage/shared/Pictures/{filename}"
 
 
 def _split_path_input(raw: str) -> tuple[str, str]:
@@ -1927,11 +1930,28 @@ def _resolve_attachment_path(raw_path: str) -> Path | None:
             parsed = urlparse(token)
             if parsed.scheme == "file":
                 expanded = unquote(parsed.path or "")
-                if parsed.netloc and os.name == "nt":
+                if (
+                    os.name == "nt"
+                    and len(expanded) >= 3
+                    and expanded[0] == "/"
+                    and expanded[2] == ":"
+                    and expanded[1].isalpha()
+                ):
+                    expanded = expanded[1:]
+                if parsed.netloc and os.name == "nt" and parsed.netloc.lower() != "localhost":
                     expanded = f"//{parsed.netloc}{expanded}"
         except Exception:
             expanded = token
-    expanded = os.path.expandvars(os.path.expanduser(expanded))
+    expanded = os.path.expandvars(expanded)
+
+    if expanded == "~" or expanded.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            expanded = home.rstrip("/\\") + expanded[1:]
+        else:
+            expanded = os.path.expanduser(expanded)
+    else:
+        expanded = os.path.expanduser(expanded)
     if os.name != "nt":
         normalized = expanded.replace("\\", "/")
         if len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/" and normalized[0].isalpha():

@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import tools.skills_tool as skills_tool_module
 from agent.skill_commands import (
     build_preloaded_skills_prompt,
@@ -734,13 +736,14 @@ class TestInlineShellExpansion:
             skill_dir = _make_skill(
                 tmp_path,
                 "dyn-cwd",
-                body="Here: !`pwd`",
+                body="Here: !`cat marker.txt`",
             )
+            (skill_dir / "marker.txt").write_text("CWD_OK")
             scan_skill_commands()
             msg = build_skill_invocation_message("/dyn-cwd")
 
         assert msg is not None
-        assert f"Here: {skill_dir}" in msg
+        assert "Here: CWD_OK" in msg
 
     def test_inline_shell_timeout_does_not_break_message(self, tmp_path):
         with (

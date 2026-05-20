@@ -23,6 +23,12 @@ import pytest
 from tools.environments.local import LocalEnvironment
 
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX process-group cleanup uses os.getpgid/os.killpg",
+)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_hermes_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

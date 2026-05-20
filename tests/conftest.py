@@ -823,17 +823,25 @@ def _live_system_guard(request, monkeypatch):
             tokens = cmd_str.split()
         if not tokens:
             return False
+        lower_tokens = [str(t).lower() for t in tokens]
         for tok in tokens:
-            head = tok.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            head = tok.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
             if head in _PROCESS_KILLERS:
                 low = cmd_str.lower()
-                # pkill -f pattern: catch hermes-themed patterns + a
-                # plain "python" -f which would catch the live gateway
-                # whose cmdline contains "python -m hermes_cli.main".
+                # Catch hermes-themed patterns plus broad Python process
+                # killers that could hit the live gateway's
+                # ``python -m hermes_cli.main`` process.
                 if (
                     "hermes" in low
                     or "gateway" in low
-                    or ("python" in low and "-f" in tokens)
+                    or (
+                        "python" in low
+                        and (
+                            "-f" in lower_tokens
+                            or "/f" in lower_tokens
+                            or head in {"killall", "skill", "taskkill"}
+                        )
+                    )
                 ):
                     return True
         return False

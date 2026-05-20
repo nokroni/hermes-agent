@@ -212,9 +212,14 @@ class TestInstallHangupProtection:
 
         try:
             # On Windows (no SIGHUP) we still wrap stdio and create the log.
+            # Other tests reload hermes_cli.main during full-suite execution, so
+            # resolve the runtime class from the installed wrapper instead of
+            # comparing against the module-level import captured at collection.
             assert state["installed"] is True
-            assert isinstance(sys.stdout, _UpdateOutputStream)
-            assert isinstance(sys.stderr, _UpdateOutputStream)
+            runtime_stream_type = type(sys.stdout)
+            assert runtime_stream_type.__name__ == "_UpdateOutputStream"
+            assert runtime_stream_type.__module__ == "hermes_cli.main"
+            assert isinstance(sys.stderr, runtime_stream_type)
             assert state["log_file"] is not None
 
             sys.stdout.write("checking mirror\n")

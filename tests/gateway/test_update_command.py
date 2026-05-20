@@ -261,6 +261,7 @@ class TestHandleUpdateCommand:
         mock_popen = MagicMock()
         with patch("gateway.run._hermes_home", hermes_home), \
              patch("gateway.run.__file__", fake_file), \
+             patch("gateway.run.sys.platform", "linux"), \
              patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}"), \
              patch("subprocess.Popen", mock_popen):
             result = await runner._handle_update_command(event)
@@ -298,6 +299,7 @@ class TestHandleUpdateCommand:
 
         with patch("gateway.run._hermes_home", hermes_home), \
              patch("gateway.run.__file__", fake_file), \
+             patch("gateway.run.sys.platform", "linux"), \
              patch("shutil.which", side_effect=which_no_setsid), \
              patch("subprocess.Popen", mock_popen):
             result = await runner._handle_update_command(event)

@@ -8,6 +8,7 @@ when launchd will auto-respawn.
 
 import os
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
@@ -35,6 +36,18 @@ def _no_restart_verify_sleep(monkeypatch):
     """
     import time as _real_time
     monkeypatch.setattr(_real_time, "sleep", lambda *_a, **_k: None)
+    # These tests simulate macOS launchd/systemd restart paths while running on
+    # any developer host. Keep platform-only helpers deterministic on Windows
+    # and avoid unrelated update side effects so the file tests restart
+    # orchestration only.
+    monkeypatch.setattr(gateway_cli, "_launchd_domain", lambda: "gui/501")
+    monkeypatch.setattr(cli_main, "_refresh_active_lazy_features", lambda: None)
+    monkeypatch.setattr(cli_main, "_update_node_dependencies", lambda: None)
+    monkeypatch.setattr(cli_main, "_build_web_ui", lambda *a, **k: None)
+    monkeypatch.setattr(cli_main, "_kill_stale_dashboard_processes", lambda: None)
+    monkeypatch.setattr(cli_main, "_print_curator_first_run_notice", lambda: None)
+    monkeypatch.setattr(cli_main, "_print_curator_recent_run_notice", lambda: None)
+    monkeypatch.setattr(cli_main, "_ensure_fhs_path_guard", lambda: None)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +198,9 @@ class TestLaunchdPlistPath:
             if "<key>PATH</key>" in line.strip():
                 path_value = lines[i + 1].strip()
                 path_value = path_value.replace("<string>", "").replace("</string>", "")
-                assert node_bin in path_value.split(":")
+                # On Windows, drive-letter colons make POSIX-style PATH splitting
+                # ambiguous even when the generated launchd plist itself is valid.
+                assert node_bin in path_value
                 break
         else:
             raise AssertionError("PATH key not found in plist")
@@ -196,8 +211,9 @@ class TestLaunchdPlistPath:
         assert "/custom/bin" in plist
 
     def test_plist_path_deduplicates_venv_bin_when_already_in_path(self, monkeypatch):
-        detected = gateway_cli._detect_venv_dir()
-        venv_bin = str(detected / "bin") if detected else str(gateway_cli.PROJECT_ROOT / "venv" / "bin")
+        fake_venv = Path("/tmp/hermes-test-venv")
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: fake_venv)
+        venv_bin = str(fake_venv / "bin")
         monkeypatch.setenv("PATH", f"{venv_bin}:/usr/bin:/bin")
         plist = gateway_cli.generate_launchd_plist()
         lines = plist.splitlines()
@@ -514,16 +530,11 @@ class TestCmdUpdateLaunchdRestart:
         self, mock_run, _mock_which, mock_args, capsys, monkeypatch,
     ):
         """Drain-aware update: when systemctl show reports a MainPID, the
-        update path sends SIGUSR1 and waits for graceful exit + respawn,
-        instead of ``systemctl restart`` (which SIGKILLs in-flight agents).
+        update path asks the gateway to drain before any hard restart.
         """
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
         monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
-
-        # Track state: before kill → "active" (old PID),
-        # after kill + exit → briefly inactive, then "active" again (new PID).
-        state = {"killed": False}
 
         def side_effect(cmd, **kwargs):
             joined = " ".join(str(c) for c in cmd)
@@ -546,12 +557,9 @@ class TestCmdUpdateLaunchdRestart:
                 return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
             if "systemctl" in joined and "is-active" in joined:
-                # Pre-kill: active.  Post-kill: active again (respawned by
-                # Restart=on-failure).  The drain loop verifies liveness
-                # separately via os.kill(pid, 0).
                 return subprocess.CompletedProcess(cmd, 0, stdout="active\n", stderr="")
 
-            # The new code path.
+            # The drain-aware path reads MainPID before signalling the gateway.
             if "systemctl" in joined and "show" in joined and "MainPID" in joined:
                 return subprocess.CompletedProcess(cmd, 0, stdout="4242\n", stderr="")
 
@@ -564,30 +572,20 @@ class TestCmdUpdateLaunchdRestart:
 
         mock_run.side_effect = side_effect
 
-        # Track SIGUSR1 delivery and simulate the gateway draining + exiting.
-        sigusr1_sent = {"value": False}
+        graceful_calls = []
 
-        def fake_kill(pid, sig):
-            import signal as _s
-            if pid == 4242 and sig == _s.SIGUSR1:
-                sigusr1_sent["value"] = True
-                state["killed"] = True
-                return
-            if pid == 4242 and sig == 0:
-                # Liveness probe — report dead once SIGUSR1 has been sent.
-                if state["killed"]:
-                    raise ProcessLookupError()
-                return
-            # For any other PID/sig combination, succeed silently.
-            return
+        def fake_graceful(pid, drain_timeout):
+            graceful_calls.append((pid, drain_timeout))
+            return True
 
-        monkeypatch.setattr("os.kill", fake_kill)
+        monkeypatch.setattr(gateway_cli, "_graceful_restart_via_sigusr1", fake_graceful)
 
         with patch.object(gateway_cli, "find_gateway_pids", return_value=[]):
             cmd_update(mock_args)
 
-        # SIGUSR1 must have been delivered to the gateway MainPID.
-        assert sigusr1_sent["value"], "Expected SIGUSR1 to be sent to MainPID"
+        # Patch the helper instead of raw os.kill so this stays portable on
+        # Windows, where signal.SIGUSR1 does not exist.
+        assert graceful_calls and graceful_calls[0][0] == 4242
 
         # And `systemctl restart` must NOT have been used (that's the
         # non-draining kill-everything path we're moving away from).

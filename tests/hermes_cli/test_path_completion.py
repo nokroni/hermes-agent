@@ -155,13 +155,14 @@ class TestIntegration:
         completions = list(completer.get_completions(doc, event))
         assert completions == []
 
-    def test_absolute_path_triggers_completion(self, completer):
-        doc = Document("check /etc/hos", cursor_position=14)
+    def test_absolute_path_triggers_completion(self, completer, tmp_path):
+        (tmp_path / "hosts").touch()
+        base = tmp_path.as_posix()
+        doc = Document(f"check {base}/hos", cursor_position=len(f"check {base}/hos"))
         event = MagicMock()
         completions = list(completer.get_completions(doc, event))
         names = _display_names(completions)
-        # /etc/hosts should exist on Linux
-        assert any("host" in n.lower() for n in names)
+        assert "hosts" in names
 
 
 class TestFileSizeLabel:

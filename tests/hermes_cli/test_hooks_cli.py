@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 from contextlib import redirect_stdout
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -88,9 +90,10 @@ class TestHooksTest:
         scripts tested with `hermes hooks test` saw different top-level
         keys than at runtime, silently breaking in production."""
         capture = tmp_path / "captured.json"
+        capture_target = shlex.quote(capture.as_posix())
         script = _hook_script(
             tmp_path,
-            f"#!/usr/bin/env bash\ncat - > {capture}\nprintf '{{}}\\n'\n",
+            f"#!/usr/bin/env bash\ncat - > {capture_target}\nprintf '{{}}\\n'\n",
         )
         cfg = {"hooks": {"subagent_stop": [{"command": str(script)}]}}
         with patch("hermes_cli.config.load_config", return_value=cfg):
@@ -187,6 +190,9 @@ class TestHooksRevoke:
 
 class TestHooksDoctor:
     def test_flags_missing_exec_bit(self, tmp_path):
+        if sys.platform.startswith("win"):
+            pytest.skip("Windows reports executable bits unreliably for hook scripts.")
+
         script = tmp_path / "hook.sh"
         script.write_text("#!/usr/bin/env bash\nprintf '{}\\n'\n")
         # No chmod — intentionally not executable

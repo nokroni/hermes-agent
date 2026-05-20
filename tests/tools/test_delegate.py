@@ -1609,7 +1609,15 @@ class TestDelegateHeartbeat(unittest.TestCase):
 
         parent = _make_mock_parent()
         touch_calls = []
-        parent._touch_activity = lambda desc: touch_calls.append(desc)
+        exceeded_idle_ceiling = threading.Event()
+        idle_ceiling = 5
+
+        def touch(desc):
+            touch_calls.append(desc)
+            if len(touch_calls) > idle_ceiling:
+                exceeded_idle_ceiling.set()
+
+        parent._touch_activity = touch
 
         child = MagicMock()
         # Child is stuck inside a single terminal call for the whole run.
@@ -1622,19 +1630,19 @@ class TestDelegateHeartbeat(unittest.TestCase):
         }
 
         def slow_run(**kwargs):
-            # Long enough to exceed the OLD idle threshold (5 cycles) at
-            # the patched interval, but shorter than the new in-tool
-            # threshold.
-            time.sleep(0.4)
+            # Wait until the heartbeat has crossed the old idle ceiling.
+            # This avoids a brittle fixed sleep: under full-suite Windows
+            # load, the heartbeat thread can legitimately schedule only six
+            # times in 0.4s even though it did not stop at the idle limit.
+            exceeded_idle_ceiling.wait(timeout=2.0)
             return {"final_response": "done", "completed": True, "api_calls": 1}
 
         child.run_conversation.side_effect = slow_run
 
-        # Patch both the interval AND the idle ceiling so the test proves
-        # the in-tool branch takes effect: with a 0.05s interval and the
-        # default _HEARTBEAT_STALE_CYCLES_IDLE=5, the old behavior would
-        # trip after 0.25s and stop firing. We should see heartbeats
-        # continuing through the full 0.4s run.
+        # Patch the interval so the test completes quickly. With the old
+        # idle threshold behavior, the heartbeat would stop at 5 touches
+        # while current_tool is still set. The in-tool branch should allow
+        # at least one more heartbeat beyond that ceiling.
         with patch("tools.delegate_tool._HEARTBEAT_INTERVAL", 0.05):
             _run_single_child(
                 task_index=0,
@@ -1643,13 +1651,10 @@ class TestDelegateHeartbeat(unittest.TestCase):
                 parent_agent=parent,
             )
 
-        # With the old idle threshold (5 cycles = 0.25s), touch_calls
-        # would cap at ~5. With the in-tool threshold (20 cycles = 1.0s),
-        # we should see substantially more heartbeats over 0.4s.
-        self.assertGreater(
-            len(touch_calls), 6,
+        self.assertTrue(
+            exceeded_idle_ceiling.is_set(),
             f"Heartbeat stopped too early while child was inside a tool; "
-            f"got {len(touch_calls)} touches over 0.4s at 0.05s interval",
+            f"got {len(touch_calls)} touches at 0.05s interval",
         )
 
 

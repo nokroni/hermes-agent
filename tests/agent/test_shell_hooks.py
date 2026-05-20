@@ -29,6 +29,16 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     return path
 
 
+def _bash_path(path: Path) -> str:
+    text = str(path)
+    if os.name == "nt":
+        drive, tail = os.path.splitdrive(text)
+        if drive:
+            tail = tail.replace("\\", "/")
+            return f"/{drive[0].lower()}{tail}"
+    return text
+
+
 def _allowlist_pair(monkeypatch, tmp_path, event: str, command: str) -> None:
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
     shell_hooks._record_approval(event, command)
@@ -320,7 +330,7 @@ class TestCallbackSubprocess:
         script = _write_script(
             tmp_path, "log.sh",
             f"#!/usr/bin/env bash\n"
-            f"echo \"$(cat -)\" >> {calls}\n"
+            f"echo \"$(cat -)\" >> \"{_bash_path(calls)}\"\n"
             f"printf '{{}}\\n'\n",
         )
         spec = shell_hooks.ShellHookSpec(
@@ -340,7 +350,7 @@ class TestCallbackSubprocess:
         capture = tmp_path / "payload.json"
         script = _write_script(
             tmp_path, "capture.sh",
-            f"#!/usr/bin/env bash\ncat - > {capture}\nprintf '{{}}\\n'\n",
+            f"#!/usr/bin/env bash\ncat - > \"{_bash_path(capture)}\"\nprintf '{{}}\\n'\n",
         )
         spec = shell_hooks.ShellHookSpec(
             event="pre_tool_call", command=str(script),
@@ -392,6 +402,48 @@ class TestCallbackSubprocess:
         cb = shell_hooks._make_callback(spec)
         # No crash = shlex parsed it correctly.
         assert cb(tool_name="terminal") is None  # empty object parses to None
+
+    def test_home_expansion_preserves_home_with_spaces(self, tmp_path, monkeypatch):
+        home = tmp_path / "home with space"
+        home.mkdir()
+        _write_script(home, "ok.sh", "#!/usr/bin/env bash\nprintf '{}\\n'\n")
+        monkeypatch.setenv("HOME", str(home))
+
+        spec = shell_hooks.ShellHookSpec(
+            event="post_tool_call",
+            command="~/ok.sh --flag",
+        )
+        cb = shell_hooks._make_callback(spec)
+
+        assert cb(tool_name="terminal") is None
+
+    def test_quoted_home_path_expands(self, tmp_path, monkeypatch):
+        home = tmp_path / "home with space"
+        home.mkdir()
+        _write_script(home, "ok.sh", "#!/usr/bin/env bash\nprintf '{}\\n'\n")
+        monkeypatch.setenv("HOME", str(home))
+
+        spec = shell_hooks.ShellHookSpec(
+            event="post_tool_call",
+            command='"~/ok.sh"',
+        )
+        cb = shell_hooks._make_callback(spec)
+
+        assert cb(tool_name="terminal") is None
+
+    def test_interpreter_prefixed_home_path_expands(self, tmp_path, monkeypatch):
+        home = tmp_path / "home with space"
+        home.mkdir()
+        _write_script(home, "ok.sh", "#!/usr/bin/env bash\nprintf '{}\\n'\n")
+        monkeypatch.setenv("HOME", str(home))
+
+        spec = shell_hooks.ShellHookSpec(
+            event="post_tool_call",
+            command='bash "~/ok.sh"',
+        )
+        cb = shell_hooks._make_callback(spec)
+
+        assert cb(tool_name="terminal") is None
 
     def test_missing_binary_logged_not_raised(self, tmp_path):
         spec = shell_hooks.ShellHookSpec(
@@ -640,6 +692,7 @@ class TestAllowlistConcurrency:
         assert "No space" in msg
         assert "re-prompt" in msg
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not meaningful on Windows")
     def test_script_is_executable_handles_interpreter_prefix(self, tmp_path):
         """For ``python3 hook.py`` and similar the interpreter reads
         the script, so X_OK on the script itself is not required —
@@ -691,6 +744,17 @@ class TestAllowlistConcurrency:
         for command, expected in cases:
             got = shell_hooks._command_script_path(command)
             assert got == expected, f"{command!r} -> {got!r}, expected {expected!r}"
+
+    def test_windows_split_command_strips_single_quoted_script_path(self, monkeypatch):
+        monkeypatch.setattr(shell_hooks.sys, "platform", "win32")
+
+        command = r"'C:\Program Files\Hermes\hook.sh' --flag"
+
+        assert shell_hooks._split_command(command) == [
+            r"C:\Program Files\Hermes\hook.sh",
+            "--flag",
+        ]
+        assert shell_hooks._command_script_path(command) == r"C:\Program Files\Hermes\hook.sh"
 
     def test_save_allowlist_uses_unique_tmp_paths(self, tmp_path, monkeypatch):
         """Two save_allowlist calls in flight must use distinct tmp files

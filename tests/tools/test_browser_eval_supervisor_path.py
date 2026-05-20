@@ -215,12 +215,16 @@ def _make_supervisor_with_cdp(cdp_response):
     # asyncio.run_coroutine_threadsafe has somewhere to dispatch.
     loop = asyncio.new_event_loop()
 
+    ready = threading.Event()
+
     def _runner():
         asyncio.set_event_loop(loop)
+        loop.call_soon(ready.set)
         loop.run_forever()
 
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
+    assert ready.wait(timeout=2), "test supervisor loop did not start"
 
     async def _fake_cdp(method, params=None, *, session_id=None, timeout=10.0):
         return cdp_response
@@ -348,11 +352,16 @@ class TestEvaluateRuntimeResponseShaping:
         sup._page_session_id = None  # ← attach hasn't happened yet
 
         loop = asyncio.new_event_loop()
-        thread = threading.Thread(
-            target=lambda: (asyncio.set_event_loop(loop), loop.run_forever()),
-            daemon=True,
-        )
+        ready = threading.Event()
+
+        def _runner():
+            asyncio.set_event_loop(loop)
+            loop.call_soon(ready.set)
+            loop.run_forever()
+
+        thread = threading.Thread(target=_runner, daemon=True)
         thread.start()
+        assert ready.wait(timeout=2), "test supervisor loop did not start"
         sup._loop = loop
         try:
             out = sup.evaluate_runtime("1+1")

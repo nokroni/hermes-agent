@@ -900,6 +900,26 @@ async def web_extract_tool(
     try:
         logger.info("Extracting content from %d URL(s)", len(urls))
 
+        backend = _get_extract_backend()
+        from agent.web_search_registry import (
+            get_active_extract_provider,
+            get_provider as _wsp_get_provider,
+        )
+        configured_provider = _wsp_get_provider(backend) if backend else None
+        if configured_provider is not None and not configured_provider.supports_extract():
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        f"{configured_provider.display_name} is a search-only "
+                        "backend and cannot extract URL content. "
+                        "Set web.extract_backend to firecrawl, "
+                        "tavily, exa, or parallel."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
         # ── SSRF protection — filter out private/internal URLs before any backend ──
         safe_urls = []
         ssrf_blocked: List[Dict[str, Any]] = []

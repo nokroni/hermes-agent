@@ -13,6 +13,8 @@ function is called at module-import time from 30+ sites, often before the
 logging subsystem has been configured.
 """
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -100,6 +102,35 @@ class TestGetHermesHomeProfileWarning:
 
         assert result == tmp_path / ".hermes"
         # Shouldn't crash; shouldn't warn either (can't tell what profile was intended)
+        assert "HERMES_HOME fallback" not in capsys.readouterr().err
+
+    def test_missing_os_home_no_crash(
+        self, fresh_constants, tmp_path, monkeypatch, capsys
+    ):
+        """Unset OS home variables should not make import-time callers crash."""
+        real_mkdtemp = fresh_constants.tempfile.mkdtemp
+        monkeypatch.setattr(
+            fresh_constants.tempfile,
+            "mkdtemp",
+            lambda prefix: real_mkdtemp(prefix=prefix, dir=tmp_path),
+        )
+        monkeypatch.setattr(
+            Path,
+            "home",
+            lambda: (_ for _ in ()).throw(RuntimeError("Could not determine home directory.")),
+        )
+
+        result = fresh_constants.get_hermes_home()
+
+        assert result.parent == tmp_path
+        assert result.name.startswith("hermes-home-")
+        assert result.is_dir()
+        assert fresh_constants.get_hermes_home() == result
+        assert fresh_constants.get_default_hermes_root() == result
+        assert fresh_constants.display_hermes_home() == result.as_posix()
+        if os.name != "nt":
+            mode = stat.S_IMODE(result.stat().st_mode)
+            assert mode & (stat.S_IRWXG | stat.S_IRWXO) == 0
         assert "HERMES_HOME fallback" not in capsys.readouterr().err
 
     def test_empty_active_profile_no_warning(

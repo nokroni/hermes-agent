@@ -18,6 +18,33 @@ _IS_WINDOWS = platform.system() == "Windows"
 logger = logging.getLogger(__name__)
 
 
+def _windows_shell_path_to_native(path: str) -> str:
+    """Convert common Git Bash/MSYS cwd paths to native Windows paths.
+
+    Git Bash reports drive roots as ``/c/...`` and the Windows temp directory
+    as ``/tmp``.  Those strings are valid inside bash, but native Python APIs
+    such as ``os.path.isdir`` and ``subprocess.Popen(cwd=...)`` do not
+    understand the MSYS mount table.  Keep the local backend's tracked cwd in
+    native form on Windows so cwd recovery does not mistake a valid shell path
+    for a deleted directory.
+    """
+    if not (_IS_WINDOWS and path):
+        return path
+
+    drive_match = re.fullmatch(r"/([a-zA-Z])(?:/(.*))?", path)
+    if drive_match:
+        drive = drive_match.group(1).upper() + ":"
+        tail = drive_match.group(2)
+        return drive + ("\\" + tail.replace("/", "\\") if tail else "\\")
+
+    if path == "/tmp" or path.startswith("/tmp/"):
+        tail = path[5:] if path.startswith("/tmp/") else ""
+        parts = [part for part in tail.split("/") if part]
+        return str(Path(tempfile.gettempdir(), *parts)) if parts else tempfile.gettempdir()
+
+    return path
+
+
 def _resolve_safe_cwd(cwd: str) -> str:
     """Return ``cwd`` if it exists as a directory, else the nearest existing
     ancestor.  Falls back to ``tempfile.gettempdir()`` only if walking up the
@@ -30,6 +57,7 @@ def _resolve_safe_cwd(cwd: str) -> str:
     raises ``FileNotFoundError`` before bash starts, wedging every subsequent
     terminal call until the gateway restarts.
     """
+    cwd = _windows_shell_path_to_native(cwd)
     if cwd and os.path.isdir(cwd):
         return cwd
     parent = os.path.dirname(cwd) if cwd else ""
@@ -572,16 +600,24 @@ class LocalEnvironment(BaseEnvironment):
         file, and propagating it would re-wedge the next ``Popen``.  The
         ``_run_bash`` recovery path will resolve a safe fallback if needed.
         """
+        updated_cwd = None
         try:
             with open(self._cwd_file, encoding="utf-8") as f:
                 cwd_path = f.read().strip()
-            if cwd_path and os.path.isdir(cwd_path):
-                self.cwd = cwd_path
+            if cwd_path:
+                native_cwd_path = _windows_shell_path_to_native(cwd_path)
+                if os.path.isdir(native_cwd_path):
+                    updated_cwd = native_cwd_path
         except (OSError, FileNotFoundError):
             pass
 
-        # Still strip the marker from output so it's not visible
+        # Still strip the marker from output so it's not visible.
         self._extract_cwd_from_output(result)
+
+        if updated_cwd is not None:
+            self.cwd = updated_cwd
+        else:
+            self.cwd = _resolve_safe_cwd(self.cwd)
 
     def cleanup(self):
         """Clean up temp files."""

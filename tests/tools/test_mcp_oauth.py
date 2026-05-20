@@ -228,17 +228,16 @@ class TestUtilities:
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("DISPLAY", raising=False)
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-        # Mock os.name and uname for non-macOS, non-Windows
-        monkeypatch.setattr(os, "name", "posix")
-        monkeypatch.setattr(os, "uname", lambda: type("", (), {"sysname": "Linux"})())
-        assert _can_open_browser() is False
+        assert _can_open_browser(
+            os_name="posix",
+            uname=lambda: type("", (), {"sysname": "Linux"})(),
+        ) is False
 
     def test_can_open_browser_true_with_display(self, monkeypatch):
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.setenv("DISPLAY", ":0")
-        monkeypatch.setattr(os, "name", "posix")
-        assert _can_open_browser() is True
+        assert _can_open_browser(os_name="posix") is True
 
 
 # ---------------------------------------------------------------------------

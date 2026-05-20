@@ -54,8 +54,34 @@ def _run_gateway_import(hermes_home: Path, initial_env: dict[str, str]) -> dict[
     )
     env = dict(initial_env)
     env["HERMES_HOME"] = str(hermes_home)
-    # Keep PATH / PYTHONPATH so venv imports resolve.
-    for k in ("PATH", "PYTHONPATH", "VIRTUAL_ENV", "HOME"):
+    isolated_root = hermes_home.parent / "subprocess-env"
+    isolated_home = isolated_root / "home"
+    isolated_tmp = isolated_root / "tmp"
+    isolated_appdata = isolated_home / "AppData" / "Roaming"
+    isolated_localappdata = isolated_home / "AppData" / "Local"
+    for path in (isolated_home, isolated_tmp, isolated_appdata, isolated_localappdata):
+        path.mkdir(parents=True, exist_ok=True)
+    env.setdefault("HOME", str(isolated_home))
+    env.setdefault("TEMP", str(isolated_tmp))
+    env.setdefault("TMP", str(isolated_tmp))
+    if sys.platform == "win32":
+        env.setdefault("USERPROFILE", str(isolated_home))
+        env.setdefault("APPDATA", str(isolated_appdata))
+        env.setdefault("LOCALAPPDATA", str(isolated_localappdata))
+    # Keep PATH / PYTHONPATH so venv imports resolve.  On Windows, also keep
+    # OS-essential variables: importing gateway.run pulls in modules that create
+    # sockets, and Winsock needs SYSTEMROOT/WINDIR to locate mswsock.dll.
+    keep_env = ["PATH", "PYTHONPATH", "VIRTUAL_ENV"]
+    if sys.platform == "win32":
+        keep_env.extend([
+            "SYSTEMROOT",
+            "SystemRoot",
+            "WINDIR",
+            "windir",
+            "COMSPEC",
+            "PATHEXT",
+        ])
+    for k in keep_env:
         if k in os.environ and k not in env:
             env[k] = os.environ[k]
 

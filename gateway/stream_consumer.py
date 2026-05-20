@@ -1218,16 +1218,20 @@ class GatewayStreamConsumer:
                                 self._MAX_FLOOD_STRIKES,
                                 self._current_edit_interval,
                             )
-                            if self._flood_strikes < self._MAX_FLOOD_STRIKES:
+                            if self._flood_strikes < self._MAX_FLOOD_STRIKES and not finalize:
                                 # Don't disable edits yet — just slow down.
                                 # Update _last_edit_time so the next edit
                                 # respects the new interval.
                                 self._last_edit_time = time.monotonic()
                                 return False
+                            # On a finalizing edit there may be no next cycle to
+                            # retry after the adaptive backoff. Promote directly
+                            # to fallback so the unsent tail is delivered now.
 
-                        # Non-flood error OR flood strikes exhausted: enter
-                        # fallback mode — send only the missing tail once the
-                        # final response is available.
+                        # Non-flood errors, exhausted flood strikes, and
+                        # finalizing edit failures enter fallback mode — send
+                        # only the missing tail once the final response is
+                        # available.
                         logger.debug(
                             "Edit failed (strikes=%d), entering fallback mode",
                             self._flood_strikes,

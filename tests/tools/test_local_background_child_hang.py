@@ -11,7 +11,11 @@ The fix switches ``_drain()`` to select()-based non-blocking reads and
 stops draining shortly after bash exits even if the pipe hasn't EOF'd.
 """
 import json
+import os
+import shlex
+import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -19,13 +23,37 @@ import pytest
 from tools.environments.local import LocalEnvironment
 
 
+def _bash_path(path: str) -> str:
+    if os.name != "nt":
+        return path
+    cygpath = shutil.which("cygpath")
+    if cygpath:
+        result = subprocess.run(
+            [cygpath, "-u", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return path.replace("\\", "/")
+
+
+_PYTHON = shlex.quote(_bash_path(sys.executable))
+
+
 def _pkill(pattern: str) -> None:
     subprocess.run(f"pkill -9 -f {pattern!r} 2>/dev/null", shell=True)
 
 
 @pytest.fixture
-def local_env():
-    env = LocalEnvironment(cwd="/tmp")
+def local_env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(home))
+    env = LocalEnvironment(cwd=str(tmp_path))
     try:
         yield env
     finally:
@@ -37,8 +65,10 @@ class TestBackgroundChildDoesNotHang:
 
     def test_plain_background_returns_promptly(self, local_env):
         """``cmd &`` with no output redirection must not hang on pipe inherit."""
+        if os.name == "nt":
+            pytest.skip("POSIX pipe-inheritance regression path requires select()-able fds")
         marker = "hermes_8340_plain_bg"
-        cmd = f'python3 -c "import time; time.sleep(60)" & echo {marker}'
+        cmd = f'{_PYTHON} -c "import time; time.sleep(60)" & echo {marker}'
         try:
             t0 = time.monotonic()
             result = local_env.execute(cmd, timeout=15)
@@ -55,8 +85,12 @@ class TestBackgroundChildDoesNotHang:
 
     def test_setsid_disown_pattern_returns_promptly(self, local_env):
         """The exact pattern from the issue: setsid ... & disown."""
+        if os.name == "nt":
+            pytest.skip("setsid/disown backgrounding is POSIX-only")
+        if shutil.which("setsid") is None:
+            pytest.skip("setsid is not available on this host")
         cmd = (
-            'setsid python3 -c "import time; time.sleep(60)" '
+            f'setsid {_PYTHON} -c "import time; time.sleep(60)" '
             '> /dev/null 2>&1 < /dev/null & disown; echo started'
         )
         try:
@@ -98,7 +132,12 @@ class TestBackgroundChildDoesNotHang:
         result = local_env.execute("sleep 30", timeout=2)
         elapsed = time.monotonic() - t0
 
-        assert elapsed < 4.0
+        # Windows uses a blocking pipe drain thread because select() does not
+        # work on anonymous pipe fds there; timeout cleanup can therefore take
+        # the command timeout plus the drain join grace period.  The regression
+        # guard is that we return promptly rather than waiting for sleep 30.
+        max_elapsed = 5.0 if os.name == "nt" else 4.0
+        assert elapsed < max_elapsed
         assert result["returncode"] == 124
         assert "timed out" in result["output"].lower()
 
@@ -121,7 +160,7 @@ class TestBackgroundChildDoesNotHang:
         # read boundaries, and most boundaries will land in the middle of the
         # 3-byte UTF-8 encoding of U+65E5.
         cmd = (
-            'python3 -c \'import sys; '
+            f'{_PYTHON} -c \'import sys; '
             'sys.stdout.buffer.write(chr(0x65e5).encode("utf-8") * 10000); '
             'sys.stdout.buffer.write(b"\\n")\''
         )
@@ -142,7 +181,7 @@ class TestBackgroundChildDoesNotHang:
         """
         # Write a deliberate invalid UTF-8 lead byte sandwiched between valid ASCII
         cmd = (
-            'python3 -c \'import sys; '
+            f'{_PYTHON} -c \'import sys; '
             'sys.stdout.buffer.write(b"before "); '
             'sys.stdout.buffer.write(b"\\xff\\xfe"); '
             'sys.stdout.buffer.write(b" after\\n")\''

@@ -20,6 +20,10 @@ from tools.environments.local import (
 
 
 class TestResolveShellInitFiles:
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="automatic POSIX shell init sourcing is disabled on Windows",
+    )
     def test_auto_sources_bashrc_when_present(self, tmp_path, monkeypatch):
         bashrc = tmp_path / ".bashrc"
         bashrc.write_text('export MARKER=seen\n')
@@ -34,6 +38,10 @@ class TestResolveShellInitFiles:
 
         assert resolved == [str(bashrc)]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="automatic POSIX shell init sourcing is disabled on Windows",
+    )
     def test_auto_sources_profile_when_present(self, tmp_path, monkeypatch):
         """~/.profile is where ``n`` / ``nvm`` installers typically write
         their PATH export on Debian/Ubuntu, and it has no interactivity
@@ -51,6 +59,10 @@ class TestResolveShellInitFiles:
 
         assert resolved == [str(profile)]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="automatic POSIX shell init sourcing is disabled on Windows",
+    )
     def test_auto_sources_bash_profile_when_present(self, tmp_path, monkeypatch):
         bash_profile = tmp_path / ".bash_profile"
         bash_profile.write_text('export MARKER=bp\n')
@@ -64,6 +76,10 @@ class TestResolveShellInitFiles:
 
         assert resolved == [str(bash_profile)]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="automatic POSIX shell init sourcing is disabled on Windows",
+    )
     def test_auto_sources_profile_before_bashrc(self, tmp_path, monkeypatch):
         """Both files present: profile runs first so PATH exports in
         profile take effect even if bashrc short-circuits on the
@@ -134,6 +150,8 @@ class TestResolveShellInitFiles:
         target.parent.mkdir()
         target.write_text('export A=1\n')
         monkeypatch.setenv("HOME", str(tmp_path))
+        if os.name == "nt":
+            monkeypatch.setenv("USERPROFILE", str(tmp_path))
         monkeypatch.setenv("CUSTOM_RC_DIR", str(tmp_path / "rc"))
 
         with patch(
@@ -148,8 +166,8 @@ class TestResolveShellInitFiles:
         ):
             resolved_var = _resolve_shell_init_files()
 
-        assert resolved_home == [str(target)]
-        assert resolved_var == [str(target)]
+        assert [os.path.normpath(p) for p in resolved_home] == [os.path.normpath(str(target))]
+        assert [os.path.normpath(p) for p in resolved_var] == [os.path.normpath(str(target))]
 
     def test_missing_explicit_files_are_skipped_silently(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -214,6 +232,10 @@ class TestSnapshotEndToEnd:
         assert "PROBE=probe-ok" in output
         assert "/opt/shell-init-probe/bin" in output
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="automatic POSIX shell init sourcing is disabled on Windows",
+    )
     def test_profile_path_export_survives_bashrc_interactive_guard(
         self, tmp_path, monkeypatch
     ):

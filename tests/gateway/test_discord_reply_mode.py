@@ -53,6 +53,7 @@ def _ensure_discord_mock():
 
 _ensure_discord_mock()
 
+import gateway.platforms.discord as discord_platform  # noqa: E402
 from gateway.platforms.discord import DiscordAdapter  # noqa: E402
 
 
@@ -327,6 +328,7 @@ def _make_message(*, content: str = "hi", reference=None):
 @pytest.fixture
 def reply_text_adapter(monkeypatch):
     """DiscordAdapter wired for _handle_message → handle_message capture."""
+    monkeypatch.setattr(discord_platform.discord, "DMChannel", FakeDMChannel, raising=False)
     config = PlatformConfig(enabled=True, token="fake-token")
     adapter = DiscordAdapter(config)
     adapter._client = SimpleNamespace(user=SimpleNamespace(id=999))

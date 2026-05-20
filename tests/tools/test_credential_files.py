@@ -16,6 +16,7 @@ from tools.credential_files import (
     iter_skills_files,
     register_credential_file,
     register_credential_files,
+    to_agent_visible_cache_path,
 )
 
 
@@ -468,6 +469,20 @@ class TestIterCacheFiles:
         entries = iter_cache_files()
         assert len(entries) == 1
         assert entries[0]["container_path"] == "/root/.hermes/cache/screenshots/session_abc/screen1.png"
+
+    def test_agent_visible_cache_path_uses_container_separators(self, tmp_path, monkeypatch):
+        """Docker-visible cache paths use POSIX separators even on Windows."""
+        hermes_home = tmp_path / ".hermes"
+        doc_dir = hermes_home / "cache" / "documents" / "nested"
+        doc_dir.mkdir(parents=True)
+        host_file = doc_dir / "report.pdf"
+        host_file.write_bytes(b"%PDF-1.4")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "docker")
+
+        assert to_agent_visible_cache_path(str(host_file)) == (
+            "/root/.hermes/cache/documents/nested/report.pdf"
+        )
 
     def test_empty_cache(self, tmp_path, monkeypatch):
         """No cache dirs → empty list."""

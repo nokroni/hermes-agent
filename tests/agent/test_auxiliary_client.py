@@ -2274,6 +2274,71 @@ class TestAuxiliaryClientPoisonedCacheEviction:
             with _client_cache_lock:
                 _client_cache.clear()
 
+    def test_codex_deadline_timeout_closes_cached_wrapper_without_timer_race(self, monkeypatch):
+        """Deadline checks must close/evict even if the timer callback loses the race."""
+        from agent.auxiliary_client import (
+            _client_cache, _client_cache_lock,
+            _CodexCompletionsAdapter, CodexAuxiliaryClient,
+        )
+
+        class NoopTimer:
+            def __init__(self, *args, **kwargs):
+                self.daemon = False
+
+            def start(self):
+                return None
+
+            def cancel(self):
+                return None
+
+        class SlowAliveStream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def __iter__(self):
+                yield SimpleNamespace(type="response.in_progress")
+
+        monotonic_values = iter([0.0, 0.1, 1.0])
+        monkeypatch.setattr(
+            "agent.auxiliary_client.time.monotonic",
+            lambda: next(monotonic_values),
+        )
+        closed = {"flag": False}
+
+        class FakeClient:
+            def __init__(self):
+                self.responses = SimpleNamespace(stream=lambda **k: SlowAliveStream())
+                self.api_key = "k"
+                self.base_url = "https://chatgpt.com/backend-api/codex"
+
+            def close(self):
+                closed["flag"] = True
+
+        monkeypatch.setattr("agent.auxiliary_client.threading.Timer", NoopTimer)
+        fake_real = FakeClient()
+        wrapper = CodexAuxiliaryClient(fake_real, "gpt-5.5")
+        cache_key = ("openai-codex", False, None, None, None)
+        with _client_cache_lock:
+            _client_cache.clear()
+            _client_cache[cache_key] = (wrapper, "gpt-5.5", None)
+        try:
+            adapter = _CodexCompletionsAdapter(fake_real, "gpt-5.5")
+            with pytest.raises(TimeoutError):
+                adapter.create(
+                    messages=[{"role": "user", "content": "x"}],
+                    timeout=0.001,
+                )
+            assert closed["flag"] is True, "deadline timeout must close inner client"
+            assert cache_key not in _client_cache, (
+                "deadline timeout must evict cache entry that wraps the closed client"
+            )
+        finally:
+            with _client_cache_lock:
+                _client_cache.clear()
+
     def test_call_llm_evicts_on_connection_error_with_explicit_provider(self):
         """Connection error on an explicit provider must drop the cached client.
 

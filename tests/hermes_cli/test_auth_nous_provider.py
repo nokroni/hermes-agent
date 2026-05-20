@@ -1,6 +1,7 @@
 """Regression tests for Nous OAuth refresh + agent-key mint interactions."""
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1024,9 +1025,14 @@ def test_shared_store_write_and_read_roundtrip(shared_store_env):
     path = _nous_shared_store_path()
     assert path.is_file()
 
-    # Permissions should be 0600 where the platform supports it.
+    # Permissions should be 0600 where the platform supports it. Windows' POSIX
+    # emulation only exposes the DOS read-only bit, so a user-only create/chmod
+    # still reports 0666 there.
     mode = path.stat().st_mode & 0o777
-    assert mode == 0o600 or mode == 0o644  # 0o644 on platforms without chmod
+    expected_modes = {0o600, 0o644}  # 0o644 on platforms without chmod
+    if os.name == "nt":
+        expected_modes.add(0o666)
+    assert mode in expected_modes
 
     loaded = _read_shared_nous_state()
     assert loaded is not None

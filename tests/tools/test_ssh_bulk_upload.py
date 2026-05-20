@@ -12,6 +12,13 @@ from tools.environments.file_sync import quoted_mkdir_command, unique_parent_dir
 from tools.environments.ssh import SSHEnvironment
 
 
+def _normalize_windows_link_target(path: str) -> str:
+    """Normalize Windows symlink targets that may include the long-path prefix."""
+    if path.startswith("\\\\?\\"):
+        path = path[4:]
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _mock_proc(*, returncode=0, poll_return=0, communicate_return=(b"", b""),
                stderr_read=b""):
     """Create a MagicMock mimicking subprocess.Popen for tar/ssh pipes."""
@@ -112,7 +119,10 @@ class TestSSHBulkUpload:
                 )
                 staging_paths.append(expected)
                 assert os.path.islink(expected), f"Expected symlink at {expected}"
-                assert os.readlink(expected) == os.path.abspath(str(f1))
+                assert (
+                    _normalize_windows_link_target(os.readlink(expected))
+                    == _normalize_windows_link_target(os.path.abspath(str(f1)))
+                )
 
             mock = MagicMock()
             mock.stdout = MagicMock()

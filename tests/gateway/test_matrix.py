@@ -1696,6 +1696,11 @@ class TestMatrixReactions:
     def setup_method(self):
         self.adapter = _make_adapter()
 
+    async def _wait_for_reaction_redactions(self):
+        tasks = list(self.adapter._reaction_redaction_tasks)
+        assert tasks
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=1.0)
+
     @pytest.mark.asyncio
     async def test_send_reaction(self):
         """_send_reaction should call send_message_event with m.reaction."""
@@ -1761,7 +1766,7 @@ class TestMatrixReactions:
         await self.adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS)
         self.adapter._redact_reaction.assert_not_awaited()
         self.adapter._send_reaction.assert_called_once_with("!room:ex", "$msg1", "\u2705")
-        await asyncio.sleep(0.03)
+        await self._wait_for_reaction_redactions()
         self.adapter._redact_reaction.assert_awaited_once_with(
             "!room:ex",
             "$eyes_reaction_123",
@@ -1790,7 +1795,7 @@ class TestMatrixReactions:
         await self.adapter.on_processing_complete(event, ProcessingOutcome.FAILURE)
         self.adapter._redact_reaction.assert_not_awaited()
         self.adapter._send_reaction.assert_called_once_with("!room:ex", "$msg1", "\u274c")
-        await asyncio.sleep(0.03)
+        await self._wait_for_reaction_redactions()
         self.adapter._redact_reaction.assert_awaited_once_with(
             "!room:ex",
             "$eyes_reaction_123",
@@ -1854,7 +1859,7 @@ class TestMatrixReactions:
         await self.adapter._redact_bot_approval_reactions("!room:ex", prompt)
 
         self.adapter._redact_reaction.assert_not_awaited()
-        await asyncio.sleep(0.03)
+        await self._wait_for_reaction_redactions()
         self.adapter._redact_reaction.assert_any_await(
             "!room:ex",
             "$allow_reaction",

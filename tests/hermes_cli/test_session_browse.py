@@ -7,7 +7,9 @@ Covers:
 """
 
 import os
+import sys
 import time
+import types
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -36,6 +38,36 @@ def _make_sessions(n=5):
 
 
 SAMPLE_SESSIONS = _make_sessions(5)
+
+
+_CURSES_KEY_DOWN = 258
+_CURSES_KEY_UP = 259
+_CURSES_KEY_ENTER = 343
+_CURSES_KEY_BACKSPACE = 263
+
+
+def _fake_curses_module():
+    """Return a minimal curses stand-in for Windows test environments."""
+    fake = types.ModuleType("curses")
+    fake.KEY_DOWN = _CURSES_KEY_DOWN
+    fake.KEY_UP = _CURSES_KEY_UP
+    fake.KEY_ENTER = _CURSES_KEY_ENTER
+    fake.KEY_BACKSPACE = _CURSES_KEY_BACKSPACE
+    fake.A_NORMAL = 0
+    fake.A_BOLD = 1
+    fake.A_DIM = 2
+    fake.COLOR_GREEN = 2
+    fake.COLOR_YELLOW = 3
+    fake.COLOR_CYAN = 6
+    fake.error = Exception
+    fake.wrapper = MagicMock()
+    fake.curs_set = MagicMock()
+    fake.has_colors = MagicMock(return_value=False)
+    fake.start_color = MagicMock()
+    fake.use_default_colors = MagicMock()
+    fake.init_pair = MagicMock()
+    fake.color_pair = lambda n: n << 8
+    return fake
 
 
 # ─── _session_browse_picker ──────────────────────────────────────────────────
@@ -249,7 +281,7 @@ class TestCursesBrowse:
 
     def _run_with_keys(self, sessions, key_sequence):
         """Simulate running the curses picker with a given key sequence."""
-        import curses
+        fake_curses = _fake_curses_module()
 
         # Build a mock stdscr that returns keys from the sequence
         mock_stdscr = MagicMock()
@@ -257,7 +289,7 @@ class TestCursesBrowse:
         mock_stdscr.getch.side_effect = key_sequence
 
         # Capture what curses.wrapper receives and call it with our mock
-        with patch("curses.wrapper") as mock_wrapper:
+        with patch.dict(sys.modules, {"curses": fake_curses}), patch("curses.wrapper") as mock_wrapper:
             # When wrapper is called, invoke the function with our mock stdscr
             def run_inner(func):
                 try:
@@ -276,21 +308,18 @@ class TestCursesBrowse:
         assert result == sessions[0]["id"]
 
     def test_down_then_enter_selects_second(self):
-        import curses
         sessions = _make_sessions(3)
-        result = self._run_with_keys(sessions, [curses.KEY_DOWN, 10])
+        result = self._run_with_keys(sessions, [_CURSES_KEY_DOWN, 10])
         assert result == sessions[1]["id"]
 
     def test_down_down_enter_selects_third(self):
-        import curses
         sessions = _make_sessions(5)
-        result = self._run_with_keys(sessions, [curses.KEY_DOWN, curses.KEY_DOWN, 10])
+        result = self._run_with_keys(sessions, [_CURSES_KEY_DOWN, _CURSES_KEY_DOWN, 10])
         assert result == sessions[2]["id"]
 
     def test_up_wraps_to_last(self):
-        import curses
         sessions = _make_sessions(3)
-        result = self._run_with_keys(sessions, [curses.KEY_UP, 10])
+        result = self._run_with_keys(sessions, [_CURSES_KEY_UP, 10])
         assert result == sessions[2]["id"]
 
     def test_escape_cancels(self):
@@ -305,7 +334,6 @@ class TestCursesBrowse:
 
     def test_type_to_filter_then_enter(self):
         """Typing characters filters the list, Enter selects from filtered."""
-        import curses
         sessions = [
             {"id": "s1", "source": "cli", "title": "Alpha project", "preview": "", "last_active": time.time()},
             {"id": "s2", "source": "cli", "title": "Beta project", "preview": "", "last_active": time.time()},
@@ -325,7 +353,6 @@ class TestCursesBrowse:
 
     def test_backspace_removes_filter_char(self):
         """Backspace removes the last character from the filter."""
-        import curses
         sessions = [
             {"id": "s1", "source": "cli", "title": "Alpha", "preview": "", "last_active": time.time()},
             {"id": "s2", "source": "cli", "title": "Beta", "preview": "", "last_active": time.time()},
@@ -337,7 +364,6 @@ class TestCursesBrowse:
 
     def test_escape_clears_filter_first(self):
         """First Esc clears the search text, second Esc exits."""
-        import curses
         sessions = _make_sessions(3)
         # Type "ab" then Esc (clears filter) then Enter (selects first)
         keys = [ord('a'), ord('b'), 27, 10]

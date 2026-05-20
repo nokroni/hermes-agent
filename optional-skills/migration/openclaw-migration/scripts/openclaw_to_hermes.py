@@ -820,14 +820,15 @@ class Migrator:
         self.items.append(
             ItemResult(
                 kind=kind,
-                source=str(source) if source else None,
-                destination=str(destination) if destination else None,
+                source=(source.as_posix() if isinstance(source, Path) else str(source).replace("\\", "/")) if source else None,
+                destination=(destination.as_posix() if isinstance(destination, Path) else str(destination).replace("\\", "/")) if destination else None,
                 status=status,
                 reason=reason,
                 details=details,
                 sensitive=sensitive,
             )
         )
+
         # Flip the config-block flag when a conflict/error occurs on a
         # config.yaml write.  Later config-mutating options will skip rather
         # than attempting a partial write.
@@ -1864,7 +1865,7 @@ class Migrator:
                 shutil.copytree(skill_dir, final_destination)
                 details: Dict[str, Any] = {"backup": str(backup_path) if backup_path else ""}
                 if final_destination != destination:
-                    details["renamed_from"] = str(destination)
+                    details["renamed_from"] = destination.as_posix()
                 self.record(kind_label, skill_dir, final_destination, "migrated", **details)
             else:
                 if final_destination != destination:
@@ -1874,7 +1875,7 @@ class Migrator:
                         final_destination,
                         "migrated",
                         f"Would copy {desc} directory under a renamed folder",
-                        renamed_from=str(destination),
+                        renamed_from=destination.as_posix(),
                     )
                 else:
                     self.record(kind_label, skill_dir, final_destination, "migrated", f"Would copy {desc} directory")
@@ -1974,7 +1975,7 @@ class Migrator:
                 shutil.copytree(skill_dir, final_destination)
                 details: Dict[str, Any] = {"backup": str(backup_path) if backup_path else ""}
                 if final_destination != destination:
-                    details["renamed_from"] = str(destination)
+                    details["renamed_from"] = destination.as_posix()
                 self.record("skill", skill_dir, final_destination, "migrated", **details)
             else:
                 if final_destination != destination:
@@ -1984,7 +1985,7 @@ class Migrator:
                         final_destination,
                         "migrated",
                         "Would copy skill directory under a renamed folder",
-                        renamed_from=str(destination),
+                        renamed_from=destination.as_posix(),
                     )
                 else:
                     self.record("skill", skill_dir, final_destination, "migrated", "Would copy skill directory")

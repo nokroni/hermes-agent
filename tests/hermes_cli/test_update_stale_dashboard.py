@@ -83,6 +83,13 @@ def _ps_runner(stdout: str):
 class TestFindStaleDashboardPids:
     """Unit tests for the ps/wmic-based detection step."""
 
+    @pytest.fixture(autouse=True)
+    def _force_posix_ps_scanner(self, monkeypatch):
+        # These tests feed ps(1)-style output.  Force the POSIX branch even when
+        # the suite runs on Windows; the Windows wmic branch has dedicated
+        # coverage in TestWindowsWmicEncoding below.
+        monkeypatch.setattr(sys, "platform", "linux")
+
     def test_no_matches_returns_empty(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(

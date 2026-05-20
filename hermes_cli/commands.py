@@ -1194,7 +1194,11 @@ class SlashCommandCompleter(Completer):
     @staticmethod
     def _path_completions(word: str, limit: int = 30):
         """Yield Completion objects for file paths matching *word*."""
-        expanded = os.path.expanduser(word)
+        home_dir = os.environ.get("HOME") or os.path.expanduser("~")
+        if word == "~" or word.startswith(("~/", "~\\")):
+            expanded = home_dir.rstrip("/\\") + word[1:]
+        else:
+            expanded = os.path.expanduser(word)
         # Split into directory part and prefix to match inside it
         if expanded.endswith("/"):
             search_dir = expanded
@@ -1221,7 +1225,7 @@ class SlashCommandCompleter(Completer):
 
             # Build the completion text (what replaces the typed word)
             if word.startswith("~"):
-                display_path = "~/" + os.path.relpath(full_path, os.path.expanduser("~"))
+                display_path = "~/" + os.path.relpath(full_path, home_dir)
             elif os.path.isabs(word):
                 display_path = full_path
             else:

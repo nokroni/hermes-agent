@@ -47,6 +47,16 @@ logger = logging.getLogger(__name__)
 
 _debug = DebugSession("vision_tools", env_var="VISION_TOOLS_DEBUG")
 
+
+def _expand_local_image_path(path_text: str) -> Path:
+    """Expand a local image path, honoring HOME in isolated test/runtime envs."""
+    if path_text == "~" or path_text.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            return Path(home) / path_text[2:]
+    return Path(os.path.expanduser(path_text))
+
+
 # Configurable HTTP download timeout for _download_image().
 # Separate from auxiliary.vision.timeout which governs the LLM API call.
 # Resolution: config.yaml auxiliary.vision.download_timeout → env var → 30s default.
@@ -701,7 +711,7 @@ async def vision_analyze_tool(
         resolved_url = image_url
         if resolved_url.startswith("file://"):
             resolved_url = resolved_url[len("file://"):]
-        local_path = Path(os.path.expanduser(resolved_url))
+        local_path = _expand_local_image_path(resolved_url)
         if local_path.is_file():
             # Local file path (e.g. from platform image cache) -- skip download
             logger.info("Using local image file: %s", image_url)

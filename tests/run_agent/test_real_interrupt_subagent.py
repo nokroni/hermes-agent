@@ -105,23 +105,31 @@ class TestRealSubagentInterrupt(unittest.TestCase):
                             return original_run(self_agent, *args, **kwargs)
 
                         with patch.object(AIAgent, 'run_conversation', patched_run):
-                            # Build a real child agent (AIAgent is NOT patched here,
-                            # only run_conversation and _build_system_prompt are)
-                            child = AIAgent(
-                                base_url="http://localhost:1",
-                                api_key="test-key",
-                                model="test/model",
-                                provider="test",
-                                api_mode="chat_completions",
-                                max_iterations=5,
-                                enabled_toolsets=["terminal"],
-                                quiet_mode=True,
-                                skip_context_files=True,
-                                skip_memory=True,
-                                platform="cli",
-                            )
-                            child._delegate_depth = 1
+                            # Avoid real provider/model probes while still exercising
+                            # a real AIAgent child and mocked LLM call.  Auxiliary
+                            # auto-detection can do slow token/network probes on Windows,
+                            # making the "child started" wait flaky and unrelated to the
+                            # interrupt behavior under test.
+                            with patch('agent.context_compressor.get_model_context_length', return_value=128000), \
+                                 patch('agent.auxiliary_client.get_text_auxiliary_client', return_value=(None, None)):
+                                # Build a real child agent (AIAgent is NOT patched here,
+                                # only run_conversation and _build_system_prompt are)
+                                child = AIAgent(
+                                    base_url="http://localhost:1",
+                                    api_key="test-key",
+                                    model="test/model",
+                                    provider="test",
+                                    api_mode="chat_completions",
+                                    max_iterations=5,
+                                    enabled_toolsets=["terminal"],
+                                    quiet_mode=True,
+                                    skip_context_files=True,
+                                    skip_memory=True,
+                                    platform="cli",
+                                )
+
                             parent._active_children.append(child)
+                            child._delegate_depth = 1
                             result = _run_single_child(
                                 task_index=0,
                                 goal="Test task",
@@ -129,6 +137,7 @@ class TestRealSubagentInterrupt(unittest.TestCase):
                                 parent_agent=parent,
                             )
                             result_holder[0] = result
+
             except Exception as e:
                 import traceback
                 traceback.print_exc()
