@@ -9,30 +9,43 @@ import os
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from tools.interrupt import set_interrupt, is_interrupted
 
 
-def _make_slow_api_response(delay=5.0):
+def _make_slow_api_response(delay=5.0, started_event=None):
     """Create a mock that simulates a slow API response (like a real LLM call)."""
     def slow_create(**kwargs):
+        if started_event is not None:
+            started_event.set()
         # Simulate a slow API call
         time.sleep(delay)
-        # Return a simple text response (no tool calls)
-        resp = MagicMock()
-        resp.choices = [MagicMock()]
-        resp.choices[0].message = MagicMock()
-        resp.choices[0].message.content = "Done"
-        resp.choices[0].message.tool_calls = None
-        resp.choices[0].message.refusal = None
-        resp.choices[0].finish_reason = "stop"
-        resp.usage = MagicMock()
-        resp.usage.prompt_tokens = 100
-        resp.usage.completion_tokens = 10
-        resp.usage.total_tokens = 110
-        resp.usage.prompt_tokens_details = None
-        return resp
+        # Return a simple text response (no tool calls). Use SimpleNamespace
+        # instead of MagicMock so absent reasoning fields stay genuinely absent;
+        # MagicMock auto-creates truthy attributes and can look like fake
+        # reasoning_content to the chat-completions normalizer.
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="Done",
+                    tool_calls=None,
+                    refusal=None,
+                    reasoning=None,
+                    reasoning_content=None,
+                    reasoning_details=None,
+                    model_extra={},
+                ),
+                finish_reason="stop",
+            )],
+            usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=10,
+                total_tokens=110,
+                prompt_tokens_details=None,
+            ),
+        )
     return slow_create
 
 
@@ -81,62 +94,60 @@ class TestRealSubagentInterrupt(unittest.TestCase):
 
         from tools.delegate_tool import _run_single_child
 
-        child_started = threading.Event()
+        api_call_started = threading.Event()
         result_holder = [None]
         error_holder = [None]
 
         def run_delegate():
             try:
                 # Patch the OpenAI client creation inside AIAgent.__init__
+                # and _interruptible_api_call's per-request client creation.
                 with patch('run_agent.OpenAI') as MockOpenAI:
                     mock_client = MagicMock()
-                    # API call takes 5 seconds — should be interrupted before that
-                    mock_client.chat.completions.create = _make_slow_api_response(delay=5.0)
+                    # API call takes 5 seconds — should be interrupted before that.
+                    # Signal from inside the mocked request so the test waits for
+                    # the real point under test: an in-flight LLM call.
+                    mock_client.chat.completions.create = _make_slow_api_response(
+                        delay=5.0,
+                        started_event=api_call_started,
+                    )
                     mock_client.close = MagicMock()
                     MockOpenAI.return_value = mock_client
 
                     # Patch the instance method so it skips prompt assembly
                     with patch.object(AIAgent, '_build_system_prompt', return_value="You are a test agent"):
-                        # Signal when child starts
-                        original_run = AIAgent.run_conversation
-
-                        def patched_run(self_agent, *args, **kwargs):
-                            child_started.set()
-                            return original_run(self_agent, *args, **kwargs)
-
-                        with patch.object(AIAgent, 'run_conversation', patched_run):
-                            # Avoid real provider/model probes while still exercising
-                            # a real AIAgent child and mocked LLM call.  Auxiliary
-                            # auto-detection can do slow token/network probes on Windows,
-                            # making the "child started" wait flaky and unrelated to the
-                            # interrupt behavior under test.
-                            with patch('agent.context_compressor.get_model_context_length', return_value=128000), \
-                                 patch('agent.auxiliary_client.get_text_auxiliary_client', return_value=(None, None)):
-                                # Build a real child agent (AIAgent is NOT patched here,
-                                # only run_conversation and _build_system_prompt are)
-                                child = AIAgent(
-                                    base_url="http://localhost:1",
-                                    api_key="test-key",
-                                    model="test/model",
-                                    provider="test",
-                                    api_mode="chat_completions",
-                                    max_iterations=5,
-                                    enabled_toolsets=["terminal"],
-                                    quiet_mode=True,
-                                    skip_context_files=True,
-                                    skip_memory=True,
-                                    platform="cli",
-                                )
-
-                            parent._active_children.append(child)
-                            child._delegate_depth = 1
-                            result = _run_single_child(
-                                task_index=0,
-                                goal="Test task",
-                                child=child,
-                                parent_agent=parent,
+                        # Avoid real provider/model probes while still exercising
+                        # a real AIAgent child and mocked LLM call.  Auxiliary
+                        # auto-detection can do slow token/network probes on Windows,
+                        # making the startup wait flaky and unrelated to the
+                        # interrupt behavior under test.
+                        with patch('agent.context_compressor.get_model_context_length', return_value=128000), \
+                             patch('agent.auxiliary_client.get_text_auxiliary_client', return_value=(None, None)):
+                            # Build a real child agent (AIAgent is NOT patched here,
+                            # only _build_system_prompt is)
+                            child = AIAgent(
+                                base_url="http://localhost:1",
+                                api_key="test-key",
+                                model="test/model",
+                                provider="test",
+                                api_mode="chat_completions",
+                                max_iterations=5,
+                                enabled_toolsets=["terminal"],
+                                quiet_mode=True,
+                                skip_context_files=True,
+                                skip_memory=True,
+                                platform="cli",
                             )
-                            result_holder[0] = result
+
+                        parent._active_children.append(child)
+                        child._delegate_depth = 1
+                        result = _run_single_child(
+                            task_index=0,
+                            goal="Test task",
+                            child=child,
+                            parent_agent=parent,
+                        )
+                        result_holder[0] = result
 
             except Exception as e:
                 import traceback
@@ -146,16 +157,16 @@ class TestRealSubagentInterrupt(unittest.TestCase):
         agent_thread = threading.Thread(target=run_delegate, daemon=True)
         agent_thread.start()
 
-        # Wait for child to start run_conversation
-        started = child_started.wait(timeout=10)
+        # Wait until the child is inside the mocked LLM call.  This avoids a
+        # Windows-only race where child construction/prompt setup can exceed a
+        # short fixed "run_conversation started" timeout, while still testing
+        # interrupt propagation during an actual in-flight API call.
+        started = api_call_started.wait(timeout=30)
         if not started:
             agent_thread.join(timeout=1)
             if error_holder[0]:
                 raise error_holder[0]
-            self.fail("Child never started run_conversation")
-
-        # Give child time to enter main loop and start API call
-        time.sleep(0.5)
+            self.fail("Child never started mocked API call")
 
         # Verify child is registered
         print(f"Active children: {len(parent._active_children)}")
