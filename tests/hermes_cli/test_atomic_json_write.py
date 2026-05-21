@@ -171,3 +171,24 @@ class TestAtomicJsonWrite:
 
         assert replace.call_count == 2
         sleep.assert_called_once_with(0.001)
+
+    def test_atomic_replace_retries_several_transient_permission_errors_on_windows(self, tmp_path):
+        """Full-suite Windows load can keep a target locked beyond one short retry."""
+        source = tmp_path / "source.tmp"
+        target = tmp_path / "target.json"
+        source.write_text("{}", encoding="utf-8")
+        transient_errors = [PermissionError(13, "denied") for _ in range(5)]
+
+        with patch("utils.os.name", "nt"), \
+             patch("utils.os.replace", side_effect=[*transient_errors, None]) as replace, \
+             patch("utils.time.sleep") as sleep:
+            assert atomic_replace(source, target) == str(target)
+
+        assert replace.call_count == 6
+        assert [call.args[0] for call in sleep.call_args_list] == [
+            0.001,
+            0.005,
+            0.025,
+            0.1,
+            0.25,
+        ]

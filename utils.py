@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+_ATOMIC_REPLACE_WINDOWS_RETRY_DELAYS = (0.001, 0.005, 0.025, 0.1, 0.25, 0.5, 1.0, None)
 
 
 def is_truthy_value(value: Any, default: bool = False) -> bool:
@@ -79,14 +80,15 @@ def atomic_replace(tmp_path: Union[str, Path], target: Union[str, Path]) -> str:
     """
     target_str = str(target)
     real_path = os.path.realpath(target_str) if os.path.islink(target_str) else target_str
-    for delay in (0.001, 0.005, 0.025, 0.1, None):
+    for delay in _ATOMIC_REPLACE_WINDOWS_RETRY_DELAYS:
         try:
             os.replace(str(tmp_path), real_path)
             return real_path
         except PermissionError:
             # Windows can transiently deny a replace when concurrent writers are
-            # racing on the same target.  The temp file is still intact, so a
-            # short retry preserves atomicity without weakening hard failures.
+            # racing on the same target or another process briefly scans/locks
+            # the new file.  The temp file is still intact, so bounded backoff
+            # preserves atomicity without weakening hard failures.
             if os.name != "nt" or delay is None:
                 raise
             time.sleep(delay)

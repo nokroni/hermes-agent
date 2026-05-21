@@ -56,9 +56,23 @@ def mock_sd(monkeypatch):
     return mock
 
 
+class FakeClock:
+    """Controllable monotonic clock for timing-sensitive callback tests."""
+
+    def __init__(self, now=100.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 # ============================================================================
 # detect_audio_environment — WSL / SSH / Docker detection
 # ============================================================================
+
 
 class TestDetectAudioEnvironment:
     def test_clean_environment_is_available(self, monkeypatch):
@@ -762,7 +776,7 @@ class TestPlayBeep:
 # ============================================================================
 
 class TestSilenceDetection:
-    def test_silence_callback_fires_after_speech_then_silence(self, mock_sd):
+    def test_silence_callback_fires_after_speech_then_silence(self, mock_sd, monkeypatch):
         np = pytest.importorskip("numpy")
         import threading
 
@@ -770,6 +784,9 @@ class TestSilenceDetection:
         mock_sd.InputStream.return_value = mock_stream
 
         from tools.voice_mode import AudioRecorder, SAMPLE_RATE
+
+        clock = FakeClock()
+        monkeypatch.setattr("tools.voice_mode.time.monotonic", clock.monotonic)
 
         recorder = AudioRecorder()
         # Use very short durations for testing
@@ -791,7 +808,7 @@ class TestSilenceDetection:
         # Simulate sustained speech (multiple loud chunks to exceed min_speech_duration)
         loud_frame = np.full((1600, 1), 5000, dtype="int16")
         callback(loud_frame, 1600, None, None)
-        time.sleep(0.06)
+        clock.advance(0.06)
         callback(loud_frame, 1600, None, None)
         assert recorder._has_spoken is True
 
@@ -800,7 +817,7 @@ class TestSilenceDetection:
         callback(silent_frame, 1600, None, None)
 
         # Wait a bit past the silence duration, then send another silent frame
-        time.sleep(0.06)
+        clock.advance(0.06)
         callback(silent_frame, 1600, None, None)
 
         # The callback should have been fired
@@ -837,7 +854,7 @@ class TestSilenceDetection:
 
         recorder.cancel()
 
-    def test_micro_pause_tolerance_during_speech(self, mock_sd):
+    def test_micro_pause_tolerance_during_speech(self, mock_sd, monkeypatch):
         """Brief dips below threshold during speech should NOT reset speech tracking."""
         np = pytest.importorskip("numpy")
         import threading
@@ -846,6 +863,9 @@ class TestSilenceDetection:
         mock_sd.InputStream.return_value = mock_stream
 
         from tools.voice_mode import AudioRecorder
+
+        clock = FakeClock()
+        monkeypatch.setattr("tools.voice_mode.time.monotonic", clock.monotonic)
 
         recorder = AudioRecorder()
         recorder._silence_duration = 0.05
@@ -864,14 +884,14 @@ class TestSilenceDetection:
 
         # Speech chunk 1
         callback(loud_frame, 1600, None, None)
-        time.sleep(0.05)
+        clock.advance(0.05)
         # Brief micro-pause (dip < max_dip_tolerance)
         callback(quiet_frame, 1600, None, None)
-        time.sleep(0.05)
+        clock.advance(0.05)
         # Speech resumes -- speech_start should NOT have been reset
         callback(loud_frame, 1600, None, None)
         assert recorder._speech_start > 0, "Speech start should be preserved across brief dips"
-        time.sleep(0.06)
+        clock.advance(0.06)
         # Another speech chunk to exceed min_speech_duration
         callback(loud_frame, 1600, None, None)
         assert recorder._has_spoken is True, "Speech should be confirmed after tolerating micro-pause"
