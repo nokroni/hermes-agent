@@ -1119,11 +1119,14 @@ class TestAudioLevelIndicator:
 class TestConfigurableSilenceParams:
     """Verify that silence detection params can be configured."""
 
-    def test_custom_threshold_and_duration(self, mock_sd):
+    def test_custom_threshold_and_duration(self, mock_sd, monkeypatch):
         np = pytest.importorskip("numpy")
 
         mock_stream = MagicMock()
         mock_sd.InputStream.return_value = mock_stream
+
+        fake_clock = FakeClock()
+        monkeypatch.setattr("tools.voice_mode.time.monotonic", fake_clock.monotonic)
 
         from tools.voice_mode import AudioRecorder
         import threading
@@ -1143,15 +1146,15 @@ class TestConfigurableSilenceParams:
         moderate = np.full((1600, 1), 1000, dtype="int16")
         for _ in range(5):
             callback(moderate, 1600, None, None)
-            time.sleep(0.02)
+            fake_clock.advance(0.02)
 
         assert recorder._has_spoken is False
-        assert fired.wait(timeout=0.2) is False
+        assert fired.is_set() is False
 
         # Now send really loud audio (above 5000 threshold)
         very_loud = np.full((1600, 1), 8000, dtype="int16")
         callback(very_loud, 1600, None, None)
-        time.sleep(0.06)
+        fake_clock.advance(0.06)
         callback(very_loud, 1600, None, None)
         assert recorder._has_spoken is True
 
